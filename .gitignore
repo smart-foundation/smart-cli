@@ -1,0 +1,8 @@
+/target
+Cargo.lock.bak
+*.rs.bk
+# Local service sockets for manual runs (never committed).
+*.sock
+# Editor / OS noise.
+.DS_Store
+*.swp

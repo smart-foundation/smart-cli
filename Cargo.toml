@@ -1,0 +1,97 @@
+# smart-cli — the network client: a capnp consumer of the contract, nothing else.
+#
+# The architecture law (the founder's correction), made mechanical here:
+#
+#   The CLI does not know smart-lib. Nothing knows smart-lib. Every consumer
+#   speaks capnp over the contract's transports, generating its OWN bindings
+#   from the contract at build time. This crate's only dependency is the
+#   CONTRACT (capnp runtime + the bindings build.rs generates from
+#   ../smart-protocol-official/schema). There is no path dep on smart-lib, no
+#   re-export of it, and no link to it — proven by the Cargo.lock and a CI grep
+#   (see knowledge/17-cli-proofs.md).
+#
+# Charter law #2 (zero-cost: you pay only for the features you enable) is the
+# reason the manifest is shaped the way it is:
+#
+#   FEATURE = COMMAND FAMILY. Each `cmd-*` feature turns on the schema-binding
+#   feature for its family (which drives build.rs to compile ONLY that family's
+#   schemas + foundation + transitive imports) AND the command surface itself.
+#   `--no-default-features --features cmd-dns` compiles DNS and links NOTHING
+#   from the net schemas — the per-feature isolation proof.
+
+[package]
+name = "smart-cli"
+version = "0.1.0"
+edition = "2021"
+description = "The network-domain CLI: a thin capnp client over the smart-protocol contract (no smart-lib, no daemon coupling)."
+license = "MIT OR Apache-2.0"
+publish = false
+
+[workspace]
+
+[lib]
+name = "smart_cli"
+path = "src/lib.rs"
+
+# The CLI binary needs a command family AND the host I/O the `std` feature
+# provides; every cmd-* feature implies std, but requiring both explicitly keeps
+# `cargo run` from ever building a bin that cannot open a socket.
+[[bin]]
+name = "net"
+path = "src/main.rs"
+required-features = ["std"]
+
+# The headless proof needs the network bindings + sockets; gating it keeps the
+# per-feature isolation build (`--features cmd-dns`) from compiling the net
+# schema into the example.
+[[example]]
+name = "agent_client"
+required-features = ["schema-network", "std"]
+
+[features]
+# The default set is deliberately NOT "everything": the CLI ships the network
+# family by default and a caller enables the siblings it wants.
+default = ["cmd-net"]
+
+# ─── std ────────────────────────────────────────────────────────
+# The widening feature: capnp std support + the host-socket transports +
+# std I/O for main. The library core stays no_std + alloc (charter law #1);
+# `std` is the seam the CLI's real use hangs on.
+std = ["capnp/std", "capnp/alloc"]
+
+# ─── schema bindings (one per family; drives build.rs codegen) ───
+# A schema-* feature compiles `<stem>.capnp` (+ foundation + transitive
+# imports) and exposes the generated `schema::<stem>_capnp` module. Nothing
+# else. This is the half the headless agent client links, with NO command
+# surface — the AI-first path (knowledge/05-AI-FIRST-SURFACE.md §4).
+schema-network = []
+schema-dns = []
+schema-bluetooth = []
+schema-tunnel = []
+schema-discovery = []
+schema-web = []
+schema-socket = []
+
+# ─── command families (each implies its schema + std) ───────────
+cmd-net = ["schema-network", "std"]
+cmd-dns = ["schema-dns", "std"]
+cmd-bt = ["schema-bluetooth", "std"]
+cmd-tunnel = ["schema-tunnel", "std"]
+cmd-discovery = ["schema-discovery", "std"]
+cmd-web = ["schema-web", "std"]
+cmd-socket = ["schema-socket", "std"]
+
+[dependencies]
+# The runtime half of the capnp triad (capnp 0.27.x — the canonical contract's
+# line). `default-features = false` + `alloc` keeps capnp itself no_std + alloc
+# (law #1); `std` above widens it. THE ONLY dependency of this crate.
+capnp = { version = "0.27.2", default-features = false, features = ["alloc"] }
+
+[build-dependencies]
+# The codegen half of the triad (capnpc 0.27.0 — the pure-Rust schema compiler
+# that drives the system `capnp` binary, 1.4.0 on this box).
+capnpc = "0.27.0"
+
+# NOTE (the architecture law): there is no smart-lib anywhere below — not a
+# dependency, not a build-dependency, not a patch. `cargo tree` in this tree
+# names capnp/capnpc/smart-cli only; the Cargo.lock has no smart-lib entry.
