@@ -94,8 +94,11 @@ impl<'a> Obj<'a> {
             out: &mut *self.out,
         }
     }
-    /// Finish the object.
-    pub fn end(self) {}
+    /// Finish the object (write the closing brace — an object left open is
+    /// malformed JSON, so this is not decoration).
+    pub fn end(self) {
+        self.out.push('}');
+    }
 }
 
 /// The value position returned by [`Obj::key`].
@@ -261,10 +264,13 @@ pub fn error_code(c: types_capnp::ErrorCode) -> &'static str {
     }
 }
 
-/// The JSON `error` object the failure laws print (contract `T.Error` shape).
+/// The JSON `error` result the failure laws print: the whole answer is one
+/// object carrying the contract `T.Error` shape under `error`.
 pub fn error_object(out: &mut String, code: types_capnp::ErrorCode, message: &str) {
+    out.push('{');
     write_key(out, "error");
     write_error(out, code, message);
+    out.push('}');
 }
 
 // ═════════════════════════════════════════════════════════════════════════

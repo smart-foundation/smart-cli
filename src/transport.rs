@@ -49,6 +49,11 @@ pub enum Target {
 }
 
 /// A concrete byte stream (unix or tcp); names no platform in a required API.
+///
+/// The non-unix `Unix` variant exists only so the type is constructible on a
+/// target without AF_UNIX; [`Connection::connect`] refuses a unix target
+/// there, so the variant is never built and its Read/Write stubs never run.
+#[cfg_attr(not(unix), allow(dead_code))]
 enum Stream {
     #[cfg(unix)]
     Unix(std::os::unix::net::UnixStream),
@@ -190,9 +195,16 @@ impl Connection {
                 (Stream::Unix(stream), format!("unix:{path}"))
             }
             #[cfg(not(unix))]
-            Target::Unix(path) => {
-                let _ = path;
-                return Err(CallError::Transport("unix sockets unavailable on this target".into()));
+            Target::Unix(_path) => {
+                // On a target with no AF_UNIX (Windows; macOS HAS AF_UNIX, so
+                // this arm is Windows-only) the unix transport cannot exist.
+                // The honest answer names the alternative rather than
+                // pretending a service is absent.
+                return Err(CallError::Transport(
+                    "this target has no AF_UNIX socket support, so the default unix transport \
+                     cannot be used: select the TCP transport with `--addr host:port` or `@host:port`"
+                        .into(),
+                ));
             }
             Target::Tcp(addr) => {
                 let stream = std::net::TcpStream::connect(addr)

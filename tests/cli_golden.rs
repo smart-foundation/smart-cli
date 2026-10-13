@@ -47,6 +47,20 @@ fn ok_json(sample: &str) -> bool {
     sample.contains('{') && !sample.contains("\"error\"")
 }
 
+/// The first stdout line, asserted to be a structurally valid JSON value (the
+/// crate's only dependency is the contract, so the test carries its own tiny
+/// structural check rather than a JSON crate).
+fn json_line(sample: &str) -> String {
+    let line = sample
+        .lines()
+        .find(|l| !l.trim().is_empty())
+        .unwrap_or_else(|| panic!("no JSON line in: {sample}"))
+        .to_string();
+    support::json::validate(&line)
+        .unwrap_or_else(|e| panic!("not valid JSON ({e}): {line}"));
+    line
+}
+
 #[test]
 fn wifi_list_golden_json_and_exit() {
     let mock = MockService::start(false).unwrap();
@@ -115,6 +129,55 @@ fn routes_and_firewall_and_proxy_contract_shaped() {
     let (proxy, code) = net(p, &["--json", "proxy"]);
     assert_eq!(code, 0);
     assert!(proxy.contains("\"enabled\""), "{proxy}");
+}
+
+/// Every `--json` answer must be VALID JSON (a contract-shaped object is not
+/// a fragment). This is the mechanical guard against an emitter that leaves an
+/// object open.
+#[test]
+fn json_answers_are_valid_json_objects() {
+    let mock = MockService::start(true).unwrap();
+    let p = mock.path().to_str().unwrap();
+    for args in [
+        vec!["--json"],
+        vec!["--json", "wifi", "list"],
+        vec!["--json", "interface", "wlan0"],
+        vec!["--json", "wifi", "stats"],
+        vec!["--json", "routes"],
+        vec!["--json", "routes", "add", "10.0.0.0/8", "192.168.1.1"],
+        vec!["--json", "firewall", "rules"],
+        vec!["--json", "firewall", "stats"],
+        vec!["--json", "firewall", "allow", "firefox", "outbound"],
+        vec!["--json", "proxy"],
+        vec!["--json", "ping", "8.8.8.8"],
+        vec!["--json", "bandwidth"],
+        vec!["--json", "net", "dns", "get"],
+        #[cfg(feature = "cmd-dns")]
+        vec!["--json", "dns", "resolve", "example.com"],
+        vec!["--json", "diagnose"],
+        vec!["--json", "vpn", "list"],
+        vec!["--json", "wifi", "scan"],
+    ] {
+        let (out, code) = net(p, &args);
+        assert_eq!(code, 0, "{args:?} -> {out}");
+        let line = json_line(&out);
+        assert!(line.starts_with('{') && line.ends_with('}'), "{args:?} must answer an object: {out}");
+    }
+    // The error answers are objects too, not fragments (a read-only class, so
+    // the mutating verb is denied rather than ok).
+    let denied = MockService::start(false).unwrap();
+    let d = denied.path().to_str().unwrap();
+    for args in [
+        vec!["--json", "networking", "off"],
+        vec!["--json", "traceroute", "8.8.8.8"],
+        vec!["--json", "connections"],
+        vec!["--json", "interface", "--where", "bogus", "==", "1"],
+    ] {
+        let (out, code) = net(d, &args);
+        assert!(code != 0, "{args:?} should not be ok: {out}");
+        let line = json_line(&out);
+        assert!(line.contains("\"error\""), "{args:?} must name an error: {out}");
+    }
 }
 
 #[test]
@@ -419,7 +482,8 @@ fn startup_budget_is_single_digit_milliseconds() {
 }
 
 /// The hot-path seam count: a read issues exactly the frames it needs — no
-/// hidden startup call, no second round trip (plan Part 6, L7).#[test]
+/// hidden startup call, no second round trip (plan Part 6, L7).
+#[test]
 fn a_read_issues_exactly_the_frames_it_needs() {
     let mock = MockService::start(true).unwrap();
     let p = mock.path().to_str().unwrap();

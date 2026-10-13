@@ -9,3 +9,7 @@ pub mod mock;
 #[cfg(feature = "schema-network")]
 #[allow(dead_code, unused_imports)]
 pub mod agent_scenario;
+
+/// The test-local structural JSON validator (no JSON crate: the only
+/// dependency of this crate is the contract).
+pub mod json;

@@ -11,6 +11,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use std::io::Write;
 
+use crate::completions;
 use crate::contract;
 use crate::json;
 use crate::registry::{self, Availability};
@@ -290,6 +291,25 @@ pub fn run(overrides: &ConnectOverrides) -> i32 {
         return help(overrides, &flags);
     }
 
+    // Completions and their installation are LOCAL views: the registry this
+    // build implements is the source, so they work with no service at all.
+    // When a service IS reachable, they consult its availability answer as the
+    // honesty filter (exactly what `--help` does); when it is not, they say
+    // availability is UNVERIFIED rather than pretending everything runs.
+    if matches!(cmd_args.first().map(String::as_str), Some("completions") | Some("install")) {
+        let family = cmd_args[0].clone();
+        let sub = &cmd_args[1..];
+        let availability = remote::resolve(overrides)
+            .ok()
+            .and_then(|spawn| Connection::connect(&spawn.target).ok())
+            .map(|mut conn| registry::list_unavailable(&mut conn))
+            .unwrap_or(registry::Availability::Unpublished);
+        return match family.as_str() {
+            "completions" => completions_command(sub, &flags, &availability),
+            _ => install_command(sub, &flags, &availability),
+        };
+    }
+
     let spawn = match remote::resolve(overrides) {
         Ok(spawn) => spawn,
         Err(e) => {
@@ -403,6 +423,164 @@ fn family_not_compiled(flags: &Flags, family: &str) -> i32 {
     registry::EXIT_USAGE
 }
 
+/// `net completions <shell>` — the generated completer for one shell, printed
+/// to stdout (the user redirects, or uses `net install completions`). With no
+/// shell, the shell-agnostic registry corpus is printed instead; with
+/// `--json`, that corpus is printed as JSON.
+fn completions_command(sub: &[String], flags: &Flags, availability: &registry::Availability) -> i32 {
+    let corpus = completions::corpus(availability);
+    let shell = sub.first().map(String::as_str).unwrap_or("");
+    match shell {
+        "" => {
+            // The registry corpus itself: the shell-agnostic form.
+            if flags.json {
+                let mut out = String::from("{\"completions\":[");
+                for (i, (task, verbs, task_flags)) in corpus.tasks.iter().enumerate() {
+                    json::sep(&mut out, i == 0);
+                    let mut o = json::Obj::new(&mut out);
+                    o.key("task").str(task);
+                    o.key("verbs").sub(|out| {
+                        let mut first = true;
+                        json::array(out, |out| {
+                            for verb in verbs {
+                                json::arr_sep(out, first);
+                                first = false;
+                                json::write_str(out, verb);
+                            }
+                        });
+                    });
+                    o.key("flags").sub(|out| {
+                        let mut first = true;
+                        json::array(out, |out| {
+                            for flag in task_flags.iter().chain(registry::GLOBAL_FLAGS.iter()) {
+                                json::arr_sep(out, first);
+                                first = false;
+                                json::write_str(out, flag);
+                            }
+                        });
+                    });
+                    o.end();
+                }
+                out.push_str(&format!(
+                    "],\"availabilityVerified\":{}}}",
+                    corpus.availability_verified
+                ));
+                println!("{out}");
+            } else {
+                print_completion_notes(&corpus);
+                for (task, verbs, _) in &corpus.tasks {
+                    if verbs.is_empty() {
+                        println!("{task}");
+                    } else {
+                        println!(
+                            "{task} {}",
+                            verbs
+                                .iter()
+                                .filter(|v| !v.starts_with("--"))
+                                .cloned()
+                                .collect::<Vec<_>>()
+                                .join(" ")
+                        );
+                    }
+                }
+            }
+            registry::EXIT_OK
+        }
+        _ => match completions::render(shell, &corpus) {
+            Ok(text) => {
+                print!("{text}");
+                print_completion_notes(&corpus);
+                registry::EXIT_OK
+            }
+            Err(reason) => {
+                usage_error(flags, &reason);
+                registry::EXIT_USAGE
+            }
+        },
+    }
+}
+
+/// The honesty note every completion view carries: what was withheld (and
+/// why), or that availability could not be verified.
+fn print_completion_notes(corpus: &completions::Corpus) {
+    if !corpus.withheld.is_empty() {
+        eprintln!(
+            "completions: {} command(s) withheld — the service reports them not runnable here: {}",
+            corpus.withheld.len(),
+            corpus.withheld.join(", ")
+        );
+        eprintln!("completions: run `net registry list-unavailable` for each reason");
+    } else if !corpus.availability_verified {
+        eprintln!(
+            "completions: the service published no registry, so availability is UNVERIFIED — \
+             a command is completed because this build implements it, not because the host can run it"
+        );
+    }
+}
+
+/// `net install completions [--shell S] [--path P] [--dry-run]` — write the
+/// generated completer ONLY where the user points. The CLI never writes to a
+/// system path silently; `--dry-run` prints what it would write.
+fn install_command(sub: &[String], flags: &Flags, availability: &registry::Availability) -> i32 {
+    if sub.first().map(String::as_str) != Some("completions") {
+        usage_error(flags, "usage: net install completions [--shell bash|zsh|fish|elvish] [--path P] [--dry-run]");
+        return registry::EXIT_USAGE;
+    }
+    let shell = sub
+        .iter()
+        .skip(1)
+        .position(|a| a == "--shell")
+        .and_then(|i| sub.get(i + 2).cloned())
+        .or_else(|| {
+            sub.iter()
+                .skip(1)
+                .find_map(|a| a.strip_prefix("--shell=").map(String::from))
+        })
+        .unwrap_or_else(|| "bash".to_string());
+    let path = sub
+        .iter()
+        .skip(1)
+        .position(|a| a == "--path")
+        .and_then(|i| sub.get(i + 2).cloned())
+        .or_else(|| {
+            sub.iter()
+                .skip(1)
+                .find_map(|a| a.strip_prefix("--path=").map(String::from))
+        });
+    let dry_run = sub.iter().skip(1).any(|a| a == "--dry-run");
+
+    let corpus = completions::corpus(availability);
+    let text = match completions::render(&shell, &corpus) {
+        Ok(text) => text,
+        Err(reason) => {
+            usage_error(flags, &reason);
+            return registry::EXIT_USAGE;
+        }
+    };
+    let Some(path) = path else {
+        usage_error(flags, "install needs --path: the CLI writes only where you point (no system path is written silently)");
+        return registry::EXIT_USAGE;
+    };
+    if dry_run {
+        // A dry run prints what it WOULD write and writes nothing.
+        println!("# would write {} bytes to {path}", text.len());
+        print!("{text}");
+        return registry::EXIT_OK;
+    }
+    match completions::write_to(&path, &text) {
+        Ok(bytes) => {
+            if !flags.quiet {
+                println!("installed {shell} completion ({bytes} bytes) to {path}");
+            }
+            registry::EXIT_OK
+        }
+        Err(e) => {
+            usage_error(flags, &format!("cannot write {path}: {e}"));
+            registry::EXIT_USAGE
+        }
+    }
+}
+
 /// Whether the `net` sub-args are the registry introspection command.
 fn is_registry_command(sub: &[String]) -> bool {
     matches!(sub.first().map(String::as_str), Some("registry"))
@@ -512,9 +690,13 @@ pub fn help(overrides: &ConnectOverrides, flags: &Flags) -> i32 {
     println!("families: {}", compiled_families().join(", "));
     println!("  (a family whose feature is not compiled is not listed)");
     println!();
-    println!("net tasks: status, interface(s), ip, networking, wifi, scan, connect, disconnect,");
-    println!("           forget, dns, routes, firewall, proxy, ping, traceroute, bandwidth,");
-    println!("           watch, vpn, diagnose, connections, ports, socket, profile, export, import");
+    // The task vocabulary is the REGISTRY (the same table the completions are
+    // generated from), so help and completion can never drift apart.
+    println!("tasks (registry order):");
+    for line in registry_task_lines().iter().take(40) {
+        println!("  {line}");
+    }
+    println!("  (run `net completions` for the machine-readable form, or `net completions <shell>`)");
     println!("  (selectors: --where <field> <op> <value> with ==, !=, >, <, ~= and and/or)");
 
     // Honesty: fetch availability and list what is hidden, when a service is
@@ -532,6 +714,31 @@ pub fn help(overrides: &ConnectOverrides, flags: &Flags) -> i32 {
         }
     }
     registry::EXIT_OK
+}
+
+/// The registry's task lines as help prints them (one source of truth with
+/// the completion generator).
+fn registry_task_lines() -> Vec<String> {
+    registry::TASKS
+        .iter()
+        .map(|spec| {
+            let task = spec.task.first().copied().unwrap_or("");
+            if spec.verbs.is_empty() {
+                task.to_string()
+            } else {
+                format!(
+                    "{task} {}",
+                    spec
+                        .verbs
+                        .iter()
+                        .filter(|v| !v.starts_with("--"))
+                        .cloned()
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                )
+            }
+        })
+        .collect()
 }
 
 /// Print the hidden commands (grammar law #8): what cannot run here, and why.

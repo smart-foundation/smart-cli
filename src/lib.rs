@@ -51,6 +51,18 @@ pub mod render; // dashboards/tables/bars over the SAME objects JSON emits
     feature = "cmd-discovery"
 ))]
 pub mod profile; // the CLI-local state file (TOML subset; no contract route)
+// Shell completions are GENERATED from the registry table the help screen
+// reads (plan Part 4.3: one registry drives help, completion, and honesty).
+#[cfg(any(
+    feature = "cmd-net",
+    feature = "cmd-dns",
+    feature = "cmd-bt",
+    feature = "cmd-tunnel",
+    feature = "cmd-web",
+    feature = "cmd-socket",
+    feature = "cmd-discovery"
+))]
+pub mod completions;
 
 // The socket transports are host I/O (std), exactly like smart-lib's
 // UnixSocket/Tcp gating; the frame codec above is the schema-blind half that
