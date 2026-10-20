@@ -109,6 +109,15 @@ pub struct Stream {
     pub reader: Box<dyn std::io::Read + Send>,
     /// The write half.
     pub writer: Box<dyn std::io::Write + Send>,
+    /// How to release the socket deterministically.
+    ///
+    /// The read half is pumped by a thread that BLOCKS on the socket, so
+    /// dropping the stream does not close it: the thread still holds the
+    /// descriptor. A client that must release a session (the universal path
+    /// dials a second endpoint after the first) needs the socket closed
+    /// NOW, not whenever the reader thread next wakes. The closer shuts the
+    /// socket down, which unblocks the reader and ends the peer's session.
+    pub closer: Option<Box<dyn Fn() + Send>>,
 }
 
 /// One transport the client can speak: an open scheme token and how to open
@@ -195,9 +204,15 @@ impl Transport for UnixTransport {
             let writer = stream
                 .try_clone()
                 .map_err(|e| CallError::Transport(format!("cannot split the socket: {e}")))?;
+            let closer = stream.try_clone().ok().map(|socket| {
+                Box::new(move || {
+                    let _ = socket.shutdown(std::net::Shutdown::Both);
+                }) as Box<dyn Fn() + Send>
+            });
             Ok(Stream {
                 reader: Box::new(reader),
                 writer: Box::new(writer),
+                closer,
             })
         }
         #[cfg(not(unix))]
@@ -227,9 +242,15 @@ impl Transport for TcpTransport {
         let writer = stream
             .try_clone()
             .map_err(|e| CallError::Transport(format!("cannot split the socket: {e}")))?;
+        let closer = stream.try_clone().ok().map(|socket| {
+            Box::new(move || {
+                let _ = socket.shutdown(std::net::Shutdown::Both);
+            }) as Box<dyn Fn() + Send>
+        });
         Ok(Stream {
             reader: Box::new(reader),
             writer: Box::new(writer),
+            closer,
         })
     }
 }
@@ -535,7 +556,8 @@ fn json_error_token(code: &types_capnp::ErrorCode) -> &'static str {
 
 /// One connected, handshaken session to the service.
 pub struct Connection {
-    session: rpc::Session,
+    /// The session, or `None` once the connection was closed.
+    session: Option<rpc::Session>,
     /// The declared transport (for `--verbose`): "unix:/path" / "tcp:host:port".
     label: String,
     /// The matched ABI namespace (surfaced by `--verbose`).
@@ -558,7 +580,11 @@ impl Connection {
     ) -> Result<Self, CallError> {
         let stream = registry.connect(endpoint)?;
         let mut conn = Connection {
-            session: rpc::Session::connect(stream.reader, stream.writer)?,
+            session: Some(rpc::Session::connect(
+                stream.reader,
+                stream.writer,
+                stream.closer,
+            )?),
             label: endpoint.label(),
             namespace: String::new(),
             schema_ids: Vec::new(),
@@ -595,8 +621,15 @@ impl Connection {
     }
 
     /// The ABI handshake: the contract's own `AbiHandshakeRequest` over the
-    /// contract's own call model. The answered intersection names the served
-    /// schema ids, so a caller can see exactly which contract it reached.
+    /// contract's own call model.
+    ///
+    /// The request is the contract's PARAM struct (`handshake_params`), whose
+    /// `request` field carries the `AbiHandshakeRequest` — the wire shape is
+    /// the schema's, never a guess. The client declares the schemas THIS
+    /// build speaks (the generated `compiled_schemas`), so the service can
+    /// answer the schema **intersection** it agrees on (abi.capnp: "agree on
+    /// an intersection before either commits to a call"); the answered ids
+    /// are the ones the audit trail names.
     fn handshake(&mut self) -> Result<(), CallError> {
         let interface = crate::contract::interface_by_name("abi", "AbiService").ok_or_else(|| {
             CallError::Transport("the ABI interface is not compiled into this build".into())
@@ -606,15 +639,29 @@ impl Connection {
         })?;
         let mut message = capnp::message::Builder::new_default();
         {
-            let mut request = message.init_root::<abi_capnp::abi_handshake_request::Builder<'_>>();
-            request.reborrow().init_caller_abi().set_namespace(NAMESPACE);
+            let mut params = message.init_root::<abi_capnp::abi_service::handshake_params::Builder<'_>>();
+            let mut request = params.reborrow().init_request();
+            let mut caller = request.reborrow().init_caller_abi();
+            caller.set_namespace(NAMESPACE);
+            let schemas = crate::contract::compiled_schemas();
+            let mut versions = caller.reborrow().init_schema_versions(schemas.len() as u32);
+            for (index, (stem, id)) in schemas.iter().enumerate() {
+                let mut version = versions.reborrow().get(index as u32);
+                version.set_id(*id);
+                version.set_name(stem);
+                version.set_major(0);
+                version.set_minor(1);
+            }
         }
         let payload = self.call(interface.type_id, method, &encode_message(&message))?;
-        let reader = decode_message::<abi_capnp::abi_handshake_response::Owned>(&payload)
+        let reader = decode_message::<abi_capnp::abi_service::handshake_results::Owned>(&payload)
             .map_err(CallError::Transport)?;
-        let response = reader
+        let results = reader
             .get()
-            .map_err(|e| CallError::Transport(format!("handshake response has no root: {e}")))?;
+            .map_err(|e| CallError::Transport(format!("handshake results have no root: {e}")))?;
+        let response = results
+            .get_response()
+            .map_err(|e| CallError::Transport(format!("handshake response is empty: {e}")))?;
         match response.which() {
             Ok(abi_capnp::abi_handshake_response::Which::Matched(abi)) => {
                 let abi = abi.map_err(|e| {
@@ -663,12 +710,40 @@ impl Connection {
         params: &[u8],
     ) -> Result<Vec<u8>, CallError> {
         let deadline = std::time::Instant::now() + self.timeout;
-        self.session.call_within(interface_id, method_id, params, deadline)
+        self.session_mut()
+            .call_within(interface_id, method_id, params, deadline)
     }
 
     /// The session, for the calls that need a capability (a subscription).
     pub fn session(&mut self) -> &mut rpc::Session {
-        &mut self.session
+        self.session_mut()
+    }
+
+    /// Close the session: the socket is released and the peer sees the
+    /// session end.
+    ///
+    /// The universal path needs this: a service that publishes its OWN
+    /// endpoint as a domain's endpoint serves one session at a time, so a
+    /// client that has finished asking discovery releases that session
+    /// before it dials the endpoint discovery named.
+    pub fn close(&mut self) {
+        if let Some(session) = self.session.as_mut() {
+            session.close();
+        }
+        self.session = None;
+    }
+
+    /// True once the session was closed.
+    pub fn is_closed(&self) -> bool {
+        self.session.is_none()
+    }
+
+    /// The live session, or the honest refusal that it is gone.
+    fn session_mut(&mut self) -> &mut rpc::Session {
+        match self.session.as_mut() {
+            Some(session) => session,
+            None => unreachable!("the session was closed"),
+        }
     }
 
     /// Call a method on a **capability** the contract handed us (a
@@ -681,7 +756,7 @@ impl Connection {
         params: &[u8],
     ) -> Result<Vec<u8>, CallError> {
         let deadline = std::time::Instant::now() + self.timeout;
-        self.session
+        self.session_mut()
             .call_capability_within(client, interface_id, method_id, params, deadline)
     }
 
@@ -700,7 +775,7 @@ impl Connection {
         <R as capnp::traits::Pipelined>::Pipeline: capnp::capability::FromTypelessPipeline,
     {
         let deadline = std::time::Instant::now() + self.timeout;
-        self.session
+        self.session_mut()
             .call_typed_within::<P, R>(interface_id, method_id, params, deadline)
     }
 }

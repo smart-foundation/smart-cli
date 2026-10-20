@@ -27,6 +27,7 @@ use capnp_rpc::twoparty;
 use capnp_rpc::RpcSystem;
 use futures::executor::LocalPool;
 
+use smart_cli::schema::capability_capnp::Operation;
 use smart_cli::schema::{abi_capnp, cli_capnp, types_capnp};
 
 /// The FIXTURE schema's generated bindings: a schema the CLI library never
@@ -38,6 +39,10 @@ use crate::support::fixture::fixture_capnp as fixture;
 use smart_cli::schema::network_capnp;
 
 static COUNTER: AtomicU64 = AtomicU64::new(0);
+
+/// The name this mock publishes itself under (in discovery).
+#[cfg(feature = "schema-discovery")]
+const MOCK_SERVICE_NAME: &str = "mock-service";
 
 /// One mock service's mutable state: the calls it has served (the seam-count
 /// measurement) and the rule/route sets its mutators wrote, so a read after a
@@ -71,6 +76,8 @@ fn written_set(slot: &Mutex<Option<Vec<u8>>>) -> Option<Vec<u8>> {
 /// A mock service bound to a unix socket, serving on a background thread.
 pub struct MockService {
     path: std::path::PathBuf,
+    /// The loopback address the same mock serves on (the tcp carrier).
+    tcp_address: std::net::SocketAddr,
     state: Arc<State>,
     /// Whether control (mutating) verbs are permitted (the capability class).
     pub allow_control: bool,
@@ -83,6 +90,13 @@ pub struct MockService {
 struct Cfg {
     control: bool,
     unavailable: Vec<String>,
+    /// The address this mock is reachable at (the carrier + the address), so
+    /// the discovery service can publish the endpoint a client then dials.
+    carrier: String,
+    address: String,
+    /// The CALL MODEL this mock publishes in discovery (the contract's own
+    /// "capnp", unless a test wants to prove the refusal path).
+    call_model: String,
     /// Answer the master-switch read with the contract's generic failure, so
     /// the exit-1 path (the call failed) is exercised against a real service
     /// double instead of a fabricated one.
@@ -112,8 +126,10 @@ impl MockService {
         Self::spawn(control, unavailable, false)
     }
 
-    /// Bind the socket and serve on a background thread.
-    fn spawn(control: bool, unavailable: Vec<String>, fail_reads: bool) -> std::io::Result<Self> {
+    /// Start a mock that publishes a CALL MODEL this client may not speak —
+    /// the proof that an unknown call model is refused with a reason, never
+    /// a silent wrong protocol.
+    pub fn start_with_call_model(control: bool, call_model: &str) -> std::io::Result<Self> {
         let unique = COUNTER.fetch_add(1, Ordering::Relaxed);
         let path = std::env::temp_dir()
             .join(format!("smart-cli-mock-{}-{unique}.sock", std::process::id()));
@@ -122,13 +138,58 @@ impl MockService {
         let state = Arc::new(State::new());
         let cfg = Cfg {
             control,
-            unavailable,
-            fail_reads,
+            unavailable: Vec::new(),
+            fail_reads: false,
+            carrier: "unix".to_string(),
+            address: path.display().to_string(),
+            call_model: call_model.to_string(),
             state: Arc::clone(&state),
         };
         thread::spawn(move || accept_loop(listener, cfg));
         Ok(MockService {
             path,
+            tcp_address: "127.0.0.1:0".parse().unwrap(),
+            state,
+            allow_control: control,
+            unavailable: Vec::new(),
+        })
+    }
+
+    /// Bind the socket and serve on a background thread.
+    ///
+    /// The mock serves BOTH carriers the contract's transports name: a unix
+    /// socket and a TCP port on the loopback. The same service answers at
+    /// both, so the interchange proof (the same command over unix and over
+    /// tcp produces byte-identical output) runs against ONE implementation.
+    fn spawn(control: bool, unavailable: Vec<String>, fail_reads: bool) -> std::io::Result<Self> {
+        let unique = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let path = std::env::temp_dir()
+            .join(format!("smart-cli-mock-{}-{unique}.sock", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let listener = std::os::unix::net::UnixListener::bind(&path)?;
+        let tcp = std::net::TcpListener::bind("127.0.0.1:0")?;
+        let tcp_address = tcp.local_addr()?;
+        let state = Arc::new(State::new());
+        let cfg = Cfg {
+            control,
+            unavailable,
+            fail_reads,
+            carrier: "unix".to_string(),
+            address: path.display().to_string(),
+            call_model: "capnp".to_string(),
+            state: Arc::clone(&state),
+        };
+        let tcp_cfg = Cfg {
+            carrier: "tcp".to_string(),
+            address: tcp_address.to_string(),
+            state: Arc::clone(&state),
+            ..cfg.clone()
+        };
+        thread::spawn(move || accept_loop(listener, cfg));
+        thread::spawn(move || accept_tcp_loop(tcp, tcp_cfg));
+        Ok(MockService {
+            path,
+            tcp_address,
             state,
             allow_control: control,
             unavailable: Vec::new(),
@@ -138,6 +199,11 @@ impl MockService {
     /// The socket path to point the CLI at (`--connect <path>`).
     pub fn path(&self) -> &std::path::Path {
         &self.path
+    }
+
+    /// The loopback address the same mock serves on (`--addr host:port`).
+    pub fn tcp_address(&self) -> std::net::SocketAddr {
+        self.tcp_address
     }
 }
 
@@ -160,6 +226,42 @@ fn accept_loop(listener: std::os::unix::net::UnixListener, cfg: Cfg) {
             Err(_) => break,
         }
     }
+}
+
+/// Accept TCP connections and serve each on its own thread.
+fn accept_tcp_loop(listener: std::net::TcpListener, cfg: Cfg) {
+    for stream in listener.incoming() {
+        match stream {
+            Ok(stream) => {
+                let cfg = cfg.clone();
+                thread::spawn(move || {
+                    let _ = serve_conn_tcp(stream, cfg);
+                });
+            }
+            Err(_) => break,
+        }
+    }
+}
+
+/// Serve one TCP connection: the same service, the same contract, the other
+/// carrier.
+fn serve_conn_tcp(stream: std::net::TcpStream, cfg: Cfg) {
+    let Ok(reader) = stream.try_clone() else {
+        return;
+    };
+    let (reader, writer) =
+        smart_cli::rpc::PumpedStream::new(Box::new(reader), Box::new(stream)).split();
+    let network: Box<dyn capnp_rpc::VatNetwork<twoparty::VatId>> = Box::new(
+        twoparty::VatNetwork::new(
+            reader,
+            writer,
+            Side::Server,
+            capnp::message::ReaderOptions::new(),
+        ),
+    );
+    let system: RpcSystem<twoparty::VatId> = RpcSystem::new(network, Some(bootstrap(cfg)));
+    let mut pool = LocalPool::new();
+    let _ = pool.run_until(system);
 }
 
 /// Serve one connection: capnp RPC over the socket, with the contract's own
@@ -292,6 +394,16 @@ fn bootstrap(cfg: Cfg) -> capnp::capability::Client {
             hook: client.into_client_hook(),
         });
     }
+    {
+        // The capability service: what this service HOLDS, published by the
+        // service itself (the client asks; it does not assume).
+        let client: smart_cli::schema::capability_capnp::capability_service::Client =
+            capnp_rpc::new_client(CapabilityServer { cfg: cfg.clone() });
+        routes.push(Route {
+            interface_id: smart_cli::schema::capability_capnp::capability_service::Client::TYPE_ID,
+            hook: client.into_client_hook(),
+        });
+    }
     #[cfg(feature = "schema-dns")]
     {
         let client: smart_cli::schema::dns_capnp::dns_service::Client =
@@ -400,30 +512,102 @@ struct AbiServer {
 impl abi_capnp::abi_service::Server for AbiServer {
     fn handshake(
         self: Rc<Self>,
-        _params: abi_capnp::abi_service::HandshakeParams,
+        params: abi_capnp::abi_service::HandshakeParams,
         results: abi_capnp::abi_service::HandshakeResults,
     ) -> impl std::future::Future<Output = Result<(), capnp::Error>> + 'static {
         let _ = &self.cfg;
+        // The results struct is the contract's own: `handshake_results` with
+        // its `response` field. The wire shape is the schema's, never a guess.
         let mut message = capnp::message::Builder::new_default();
         {
-            let mut resp = message.init_root::<abi_capnp::abi_handshake_response::Builder<'_>>();
+            let mut results_root =
+                message.init_root::<abi_capnp::abi_service::handshake_results::Builder<'_>>();
+            let mut resp = results_root.reborrow().init_response();
             let mut matched = resp.reborrow().init_matched();
             matched.set_namespace("smart-protocol");
             let mut version = matched.reborrow().init_version();
             version.set_major(0);
             version.set_minor(1);
             version.set_patch(0);
+            // The INTERSECTION: the schemas the caller declared that this
+            // service speaks. A caller that declares none gets this
+            // service's own catalogue (there is nothing to intersect).
+            let declared: Vec<u64> = params
+                .get()
+                .ok()
+                .and_then(|params| params.get_request().ok())
+                .map(|request| {
+                    request
+                        .get_caller_abi()
+                        .map(|caller| {
+                            match caller.get_schema_versions() {
+                                Ok(versions) => (0..versions.len())
+                                    .map(|index| versions.get(index).get_id())
+                                    .collect(),
+                                Err(_) => Vec::new(),
+                            }
+                        })
+                        .unwrap_or_default()
+                })
+                .unwrap_or_default();
             #[cfg(feature = "schema-network")]
             {
-                let mut schemas = matched.reborrow().init_schema_versions(1);
-                let mut schema = schemas.reborrow().get(0);
-                schema.set_id(network_schema_id());
-                schema.set_name("smart-protocol/network");
+                let served = network_schema_id();
+                let agreed = declared.is_empty() || declared.contains(&served);
+                let count = if agreed { 1 } else { 0 };
+                let mut schemas = matched.reborrow().init_schema_versions(count);
+                if agreed {
+                    let mut schema = schemas.reborrow().get(0);
+                    schema.set_id(served);
+                    schema.set_name("smart-protocol/network");
+                }
             }
             #[cfg(not(feature = "schema-network"))]
             {
                 let _ = matched.reborrow().init_schema_versions(0);
             }
+        }
+        fill(&message, results);
+        std::future::ready(Ok(()))
+    }
+}
+
+/// The capability service: what this service holds, published by itself.
+///
+/// The published OPERATIONS are the class: a control-class service publishes
+/// the mutating operations, a read-only one does not. The client renders
+/// what it is given.
+struct CapabilityServer {
+    cfg: Cfg,
+}
+
+impl smart_cli::schema::capability_capnp::capability_service::Server for CapabilityServer {
+    fn list(
+        self: Rc<Self>,
+        _params: smart_cli::schema::capability_capnp::capability_service::ListParams,
+        results: smart_cli::schema::capability_capnp::capability_service::ListResults,
+    ) -> impl std::future::Future<Output = Result<(), capnp::Error>> + 'static {
+        self.cfg.state.requests.fetch_add(1, Ordering::SeqCst);
+        let control = self.cfg.control;
+        let mut message = capnp::message::Builder::new_default();
+        {
+            use smart_cli::schema::capability_capnp::capability_service as w;
+            let mut r = message.init_root::<w::list_results::Builder<'_>>();
+            let mut list = r.reborrow().init_caps(1);
+            let mut capability = list.reborrow().get(0);
+            {
+                let id = capability.reborrow().init_id(4);
+                id.copy_from_slice(&[0x6d, 0x6f, 0x63, 0x6b]);
+            }
+            capability.set_target("mock-service");
+            let operations = if control { 2 } else { 1 };
+            let mut ops = capability.reborrow().init_operations(operations);
+            ops.reborrow().set(0, Operation::Read);
+            if control {
+                ops.reborrow().set(1, Operation::Execute);
+            }
+            capability.reborrow().init_audit().set_issuer("mock-service");
+            r.set_total_count(1);
         }
         fill(&message, results);
         std::future::ready(Ok(()))
@@ -515,12 +699,30 @@ impl cli_capnp::cli_service::Server for CliServer {
                 let mut presentation = reg.reborrow().init_presentation();
                 presentation.reborrow().set_domain(command.domain);
                 presentation.reborrow().set_summary(command.summary);
+                // The metadata: the method's IDENTITY (the ordinal the schema
+                // declares) and, for a schema the CLI never compiled, the
+                // schema's node tree. Both are contract-legal map entries.
+                let mut entries: Vec<(String, String)> = Vec::new();
+                if let Some(ordinal) = method_ordinal(command.interface, command.method) {
+                    entries.push((
+                        smart_cli::registry::METADATA_METHOD_ID.to_string(),
+                        ordinal.to_string(),
+                    ));
+                }
                 if command.domain == "fixture" {
+                    entries.push((
+                        smart_cli::dynamic::SCHEMA_METADATA_KEY.to_string(),
+                        fixture_schema_hex(),
+                    ));
+                }
+                if !entries.is_empty() {
                     let mut meta = reg.reborrow().init_metadata();
-                    let mut entries = meta.reborrow().init_entries(1);
-                    let mut e = entries.reborrow().get(0);
-                    e.reborrow().set_key(smart_cli::dynamic::SCHEMA_METADATA_KEY);
-                    e.set_value(fixture_schema_hex());
+                    let mut map = meta.reborrow().init_entries(entries.len() as u32);
+                    for (index, (key, value)) in entries.iter().enumerate() {
+                        let mut e = map.reborrow().get(index as u32);
+                        e.reborrow().set_key(key);
+                        e.set_value(value);
+                    }
                 }
             }
             list_results.set_total(published.len() as u64);
@@ -539,6 +741,30 @@ struct PublishedCommand {
     method: &'static str,
     domain: &'static str,
     summary: &'static str,
+}
+
+/// The capnp ordinal of one method, read from the schema tree the mock
+/// publishes.
+///
+/// The mock is CONTRACT-ONLY: it publishes the identity the SCHEMA declares,
+/// never a constant written here. For a schema this build compiled, the
+/// generated table has it; for the FIXTURE schema (which the CLI never
+/// compiles), the tree the mock publishes carries it — the same tree a
+/// client reads.
+fn method_ordinal(interface: &str, method: &str) -> Option<u16> {
+    if let Some(info) = smart_cli::contract::interface_named(interface) {
+        if let Some(id) = smart_cli::contract::method_id(info.stem, info.name, method) {
+            return Some(id);
+        }
+    }
+    let tree = smart_cli::dynamic::SchemaTree::decode(&fixture_schema_bytes())?;
+    tree.method(interface, method).map(|method| method.id)
+}
+
+/// The fixture schema's node tree, as bytes.
+fn fixture_schema_bytes() -> Vec<u8> {
+    const BYTES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/fixture_schema.bin"));
+    BYTES.to_vec()
 }
 
 /// The mock's published registry: the contract's own command surface.
@@ -1339,21 +1565,48 @@ struct DiscoveryServer {
 impl smart_cli::schema::discovery_capnp::discovery::Server for DiscoveryServer {
     fn lookup(
         self: Rc<Self>,
-        _params: smart_cli::schema::discovery_capnp::discovery::LookupParams,
+        params: smart_cli::schema::discovery_capnp::discovery::LookupParams,
         results: smart_cli::schema::discovery_capnp::discovery::LookupResults,
     ) -> impl std::future::Future<Output = Result<(), capnp::Error>> + 'static {
         self.cfg.state.requests.fetch_add(1, Ordering::SeqCst);
-        fill(&discovery_lookup_msg(), results);
+        // The lookup HONOURS the filter: this service publishes itself under
+        // one name, and a caller that asks for another name gets an empty
+        // answer (a discovery service that answered for a name nobody
+        // published would be lying).
+        let asked = params
+            .get()
+            .ok()
+            .and_then(|params| params.get_filter().ok())
+            .map(|filter| filter.get_name().map(|t| t.to_str().unwrap_or("").to_string()))
+            .and_then(|name| name.ok())
+            .unwrap_or_default();
+        let name = if asked.is_empty() || asked == MOCK_SERVICE_NAME {
+            MOCK_SERVICE_NAME.to_string()
+        } else {
+            asked
+        };
+        fill(&discovery_lookup_msg(&name, &self.cfg), results);
         std::future::ready(Ok(()))
     }
 
     fn resolve(
         self: Rc<Self>,
-        _params: smart_cli::schema::discovery_capnp::discovery::ResolveParams,
+        params: smart_cli::schema::discovery_capnp::discovery::ResolveParams,
         results: smart_cli::schema::discovery_capnp::discovery::ResolveResults,
     ) -> impl std::future::Future<Output = Result<(), capnp::Error>> + 'static {
         self.cfg.state.requests.fetch_add(1, Ordering::SeqCst);
-        fill(&discovery_resolve_msg(), results);
+        let asked = params
+            .get()
+            .ok()
+            .map(|params| params.get_name().map(|t| t.to_str().unwrap_or("").to_string()))
+            .and_then(|name| name.ok())
+            .unwrap_or_default();
+        let name = if asked.is_empty() || asked == MOCK_SERVICE_NAME {
+            MOCK_SERVICE_NAME.to_string()
+        } else {
+            asked
+        };
+        fill(&discovery_resolve_msg(&name, &self.cfg), results);
         std::future::ready(Ok(()))
     }
 }
@@ -1648,28 +1901,92 @@ fn web_resolve_msg() -> capnp::message::Builder<capnp::message::HeapAllocator> {
     m
 }
 
+/// Write the open metadata of a descriptor or an endpoint: the CALL MODEL
+/// this service speaks and the CARRIER it is reachable over.
+///
+/// The same keys, with the same meaning, as the service that publishes them
+/// for real and the client that reads them.
 #[cfg(feature = "schema-discovery")]
-fn discovery_lookup_msg() -> capnp::message::Builder<capnp::message::HeapAllocator> {
+fn write_metadata(
+    builder: &mut smart_cli::schema::types_capnp::string_map::Builder<'_>,
+    entries: &[(&str, &str)],
+) {
+    let mut map = builder.reborrow().init_entries(entries.len() as u32);
+    for (index, (key, value)) in entries.iter().enumerate() {
+        let mut entry = map.reborrow().get(index as u32);
+        entry.reborrow().set_key(key);
+        entry.set_value(value);
+    }
+}
+
+/// The descriptor the mock publishes: the name, the endpoint it is reachable
+/// at, and the CALL MODEL it speaks.
+#[cfg(feature = "schema-discovery")]
+fn write_descriptor(
+    descriptor: &mut smart_cli::schema::discovery_capnp::service_descriptor::Builder<'_>,
+    name: &str,
+    cfg: &Cfg,
+) {
+    descriptor.reborrow().set_name(name);
+    descriptor.set_category("network");
+    descriptor
+        .reborrow()
+        .init_id()
+        .set_id(network_schema_id());
+    let mut endpoints = descriptor.reborrow().init_endpoints(1);
+    let mut endpoint = endpoints.reborrow().get(0);
+    endpoint.set_transport(&cfg.carrier);
+    endpoint.set_address(&cfg.address);
+    write_metadata(
+        &mut endpoint.reborrow().init_metadata(),
+        &[
+            (smart_cli::service::METADATA_CALL_MODEL, &cfg.call_model),
+            (smart_cli::service::METADATA_CARRIER, &cfg.carrier),
+        ],
+    );
+    write_metadata(
+        &mut descriptor.reborrow().init_metadata(),
+        &[(smart_cli::service::METADATA_CALL_MODEL, &cfg.call_model)],
+    );
+}
+
+#[cfg(feature = "schema-discovery")]
+fn discovery_lookup_msg(
+    name: &str,
+    cfg: &Cfg,
+) -> capnp::message::Builder<capnp::message::HeapAllocator> {
     use smart_cli::schema::discovery_capnp::discovery as w;
     let mut m = capnp::message::Builder::new_default();
     {
         let mut r = m.init_root::<w::lookup_results::Builder<'_>>();
+        // A name this service does not publish: an empty answer, honestly.
+        if name != MOCK_SERVICE_NAME {
+            r.set_total(0);
+            return m;
+        }
         let mut list = r.reborrow().init_services(1);
         let mut svc = list.reborrow().get(0);
-        svc.reborrow().set_name("mock-service");
+        write_descriptor(&mut svc, name, cfg);
         r.set_total(1);
     }
     m
 }
 
 #[cfg(feature = "schema-discovery")]
-fn discovery_resolve_msg() -> capnp::message::Builder<capnp::message::HeapAllocator> {
+fn discovery_resolve_msg(
+    name: &str,
+    cfg: &Cfg,
+) -> capnp::message::Builder<capnp::message::HeapAllocator> {
     use smart_cli::schema::discovery_capnp::discovery as w;
     let mut m = capnp::message::Builder::new_default();
     {
         let mut r = m.init_root::<w::resolve_results::Builder<'_>>();
+        if name != MOCK_SERVICE_NAME {
+            r.set_present(false);
+            return m;
+        }
         let mut descriptor = r.reborrow().init_descriptor();
-        descriptor.reborrow().set_name("mock-service");
+        write_descriptor(&mut descriptor, name, cfg);
         r.set_present(true);
     }
     m

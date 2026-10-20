@@ -508,11 +508,18 @@ pub fn run(overrides: &ConnectOverrides) -> i32 {
 /// The **generic path**: a command the SERVICE published and this build never
 /// compiled.
 ///
-/// The registry names the method (schema id + interface + method) and the
-/// service publishes the schema's node tree; the CLI walks that tree to
-/// address the call — no compiled binding, no hand-written ordinal, no
-/// per-domain call site. A service that ships a contract this CLI has never
-/// seen therefore works with no CLI change at all.
+/// The registry names the method (schema id + interface + method) and
+/// publishes the schema's node tree; the CLI walks that tree to address the
+/// call — no compiled binding, no hand-written ordinal, no per-domain call
+/// site. A service that ships a contract this CLI has never seen therefore
+/// works with no CLI change at all.
+///
+/// The method's **identity** comes from the registration's metadata
+/// (`methodId`): the contract's `CommandRegistration` names the method but
+/// carries no ordinal, so the service publishes the one it resolved from the
+/// schema tree. When the service published none, the schema tree's own
+/// `codeOrder` is the fallback — and when neither knows, the CLI refuses
+/// honestly rather than calling a guessed ordinal.
 ///
 /// `None` means the service published no such command: the caller then
 /// refuses honestly (the CLI never invents a route).
@@ -529,6 +536,12 @@ pub fn generic_command(app: &mut App, path: &str, args: &[String]) -> Option<i32
     let method = tree
         .method(&command.interface, &command.method)?
         .clone();
+    // The ordinal: the service's published identity first, the schema tree's
+    // own `codeOrder` as the fallback.
+    let method_id = match command.method_id() {
+        Some(published) => published,
+        None => method.id,
+    };
     let params = match crate::dynamic::build_params(&tree, &method, &key_value_args(args)) {
         Ok(params) => params,
         Err(error) => {
@@ -540,9 +553,9 @@ pub fn generic_command(app: &mut App, path: &str, args: &[String]) -> Option<i32
         &command.domain,
         &command.interface,
         &command.method,
-        method.id,
+        method_id,
     );
-    match app.conn.call(interface.type_id, method.id, &params) {
+    match app.conn.call(interface.type_id, method_id, &params) {
         Ok(bytes) => {
             let values = crate::dynamic::read_results(&tree, method.results_type_id, &bytes)
                 .unwrap_or_default();
@@ -924,7 +937,7 @@ fn print_published(service: Option<&registry::ServiceRegistry>) {
             let extra: Vec<&registry::Command> = service
                 .commands
                 .iter()
-                .filter(|command| !registry_task_lines().iter().any(|line| line == &command.path))
+                .filter(|command| !registry::implements(command))
                 .collect();
             if extra.is_empty() {
                 println!("published by the service: this build implements them all.");
@@ -945,26 +958,7 @@ fn print_published(service: Option<&registry::ServiceRegistry>) {
 /// The registry's task lines as help prints them (one source of truth with
 /// the completion generator).
 fn registry_task_lines() -> Vec<String> {
-    registry::TASKS
-        .iter()
-        .map(|spec| {
-            let task = spec.task.first().copied().unwrap_or("");
-            if spec.verbs.is_empty() {
-                task.to_string()
-            } else {
-                format!(
-                    "{task} {}",
-                    spec
-                        .verbs
-                        .iter()
-                        .filter(|v| !v.starts_with("--"))
-                        .cloned()
-                        .collect::<Vec<_>>()
-                        .join(" ")
-                )
-            }
-        })
-        .collect()
+    registry::task_lines()
 }
 
 /// Print the hidden commands (grammar law #8): what cannot run here, and why.

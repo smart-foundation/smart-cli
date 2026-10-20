@@ -25,5 +25,10 @@ struct EchoResponse {
 }
 
 interface Echo {
-    echo @0 (host :Text, count :UInt32 = 1) -> (response :EchoResponse);
+    # The ordinals are SEQUENTIAL, so the method the CLI addresses generically
+    # is NOT the first one: a client that addresses ordinal 0 by habit (or
+    # by a hand-written table) calls the wrong method and the proof fails
+    # loudly, not quietly.
+    ping @0 () -> (response :EchoResponse);
+    echo @1 (host :Text, count :UInt32 = 1) -> (response :EchoResponse);
 }

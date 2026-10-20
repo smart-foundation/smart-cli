@@ -77,6 +77,10 @@ pub mod rpc; // the contract's own call model: capnp RPC over a byte stream
 pub mod transport;
 #[cfg(feature = "std")]
 pub mod remote;
+// The universal path: discovery → endpoint → ABI → call, and the authority
+// question the client asks the service itself (what does it hold?).
+#[cfg(feature = "std")]
+pub mod service;
 
 // ── The command surface: parsing + rendering, no added capability ──
 #[cfg(any(

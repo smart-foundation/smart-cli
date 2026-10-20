@@ -8,7 +8,7 @@
 //! A command that cannot run here is NOT completed as if it can:
 //! * a task whose `cmd-*` feature is off has no registry entry at all, so it is
 //!   never offered;
-//! * a task the SERVICE reports unavailable (`listUnavailable @13`) is removed
+//! * a task the SERVICE reports unavailable (`listUnavailable`) is removed
 //!   at render time — the same filter `--help` applies — and the human views
 //!   name what was withheld and why.
 //!

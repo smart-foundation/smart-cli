@@ -199,7 +199,7 @@ fn exit_code_permission_on_readonly_control_verb() {
 #[test]
 fn exit_code_unavailable_with_reason() {
     let mock = MockService::start(false).unwrap();
-    // traceroute @55 is not in the mock's served set -> notSupported -> exit 3.
+    // the traceroute method is not in the mock's served set -> notSupported -> exit 3.
     let (out, code) = net(mock.path().to_str().unwrap(), &["--json", "traceroute", "8.8.8.8"]);
     assert_eq!(code, 3, "notSupported -> exit 3; got {code}: {out}");
     assert!(out.contains("\"error\"") && out.contains("notSupported"), "{out}");
@@ -347,7 +347,7 @@ fn firewall_rule_add_remove_and_disable() {
     assert!(!out.contains("\"web\""), "{out}");
 }
 
-/// The hit-stats row: the contract's `FirewallRule.hitCount` @13 aggregated
+/// The hit-stats row: the contract's `FirewallRule.hitCount` aggregated
 /// client-side (measured, never assumed).
 #[test]
 fn firewall_stats_aggregates_the_contract_hit_counters() {

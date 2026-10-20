@@ -100,10 +100,13 @@ pub struct StructInfo {
 pub struct MethodInfo {
     /// The method's name (the schema's own spelling).
     pub name: String,
-    /// The method's id — the ordinal the schema declares.
+    /// The method's ORDINAL — the number the schema declares, which is the
+    /// compiler's own `codeOrder`.
+    ///
+    /// This is the method's identity on the wire: a call carries the
+    /// interface's type id and this ordinal. It is never guessed, and never
+    /// derived from a node id.
     pub id: u16,
-    /// The method's node id in the tree (the same number as `id`).
-    pub node_id: u64,
     /// The type id of the method's params struct.
     pub params_type_id: u64,
     /// The type id of the method's results struct.
@@ -139,36 +142,20 @@ impl SchemaTree {
         .ok()?;
         let request = reader.get_root::<code_generator_request::Reader>().ok()?;
         let mut tree = SchemaTree::default();
-        // The method's id lives on the method's NODE (the `Method` struct of
-        // the interface does not carry it), so the tree remembers every
-        // node's scope and display name to find it.
-        let mut scopes: Vec<(u64, String, u64)> = Vec::new();
         for node in request.get_nodes().into_iter().flatten() {
             let node_id = node.get_id();
-            scopes.push((
-                node.get_scope_id(),
-                text(node.get_display_name()),
-                node_id,
-            ));
             match node.which() {
                 Ok(node::Which::Interface(interface)) => {
                     let mut methods = Vec::new();
-                    let interface_name = text(node.get_display_name());
                     for method in interface.get_methods().into_iter().flatten() {
                         let name = text(method.get_name());
-                        let node_id = scopes
-                            .iter()
-                            .find(|(scope, display, _)| {
-                                *scope == node_id
-                                    && (display == &format!("{interface_name}.{name}")
-                                        || display.ends_with(&format!(".{name}")))
-                            })
-                            .map(|(_, _, id)| *id)
-                            .unwrap_or_default();
+                        // The method's ORDINAL: the compiler's own
+                        // `codeOrder` — the number the generated dispatch
+                        // would use. It is not a node id, and it is not
+                        // something a client may guess.
                         methods.push(MethodInfo {
                             name,
-                            id: node_id as u16,
-                            node_id,
+                            id: method.get_code_order(),
                             params_type_id: method.get_param_struct_type(),
                             results_type_id: method.get_result_struct_type(),
                         });

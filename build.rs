@@ -287,6 +287,7 @@ fn write_contract(out_dir: &Path, schema_dir: &Path, files: &[String], binary_ve
     let mut interface_arms = String::new();
     let mut named_arms = String::new();
     let mut method_arms = String::new();
+    let mut compiled = String::new();
 
     for file in files {
         let stem = schema_file_to_stem(file);
@@ -296,6 +297,7 @@ fn write_contract(out_dir: &Path, schema_dir: &Path, files: &[String], binary_ve
         if let Some(id) = schema_id_of(&source) {
             ids.push_str(&format!("    \"{stem}\" => Some({id}),\n"));
             stem_arms.push_str(&format!("    {id} => Some(\"{stem}\"),\n"));
+            compiled.push_str(&format!("    (\"{stem}\", {id}),\n"));
         }
         for (name, names) in struct_fields(&source) {
             // A struct name can be declared by more than one schema (the
@@ -376,7 +378,17 @@ fn write_contract(out_dir: &Path, schema_dir: &Path, files: &[String], binary_ve
         .iter()\n\
         .find(|(name, _)| *name == method)\n\
         .map(|(_, id)| *id)\n\
-}}\n}}\n"
+}}\n\
+         \n\
+         /// The schemas THIS build speaks, as (stem, canonical schema id).\n\
+         /// GENERATED from the compiled set: the ABI handshake declares them,\n\
+         /// so the service computes the schema INTERSECTION it agrees on\n\
+         /// (abi.capnp: agree on an intersection before either commits to a\n\
+         /// call). Nothing here is hand-written.\n\
+         pub fn compiled_schemas() -> &'static [(&'static str, u64)] {{\n\
+    &[{compiled}    ]\n\
+}}\n\
+}}\n"
     );
     std::fs::write(out_dir.join("contract.rs"), out)
         .unwrap_or_else(|e| panic!("build.rs: cannot write contract.rs: {e}"));

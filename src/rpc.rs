@@ -278,6 +278,9 @@ impl WriterPump {
 pub struct Session {
     pool: LocalPool,
     bootstrap: Box<dyn ClientHook>,
+    /// How to release the socket deterministically (see
+    /// [`crate::transport::Stream::closer`]).
+    closer: Option<Box<dyn Fn() + Send>>,
 }
 
 impl Session {
@@ -291,6 +294,7 @@ impl Session {
     pub fn connect(
         reader: Box<dyn Read + Send>,
         writer: Box<dyn Write + Send>,
+        closer: Option<Box<dyn Fn() + Send>>,
     ) -> Result<Self, CallError> {
         let (reader, writer) = PumpedStream::new(reader, writer).split();
         let network: Box<dyn capnp_rpc::VatNetwork<twoparty::VatId>> = Box::new(
@@ -307,7 +311,22 @@ impl Session {
             .map_err(|error| {
                 CallError::Transport(format!("cannot start the RPC session: {error:?}"))
             })?;
-        Ok(Self { pool, bootstrap })
+        Ok(Self {
+            pool,
+            bootstrap,
+            closer,
+        })
+    }
+
+    /// Release the session NOW: the socket is shut down, so the peer sees the
+    /// session end and the reader thread unblocks.
+    ///
+    /// Dropping a session is not enough: the read half is pumped by a thread
+    /// that blocks on the socket and still holds the descriptor.
+    pub fn close(&mut self) {
+        if let Some(closer) = self.closer.take() {
+            closer();
+        }
     }
 
     /// The peer's bootstrap capability, as a capnp client.

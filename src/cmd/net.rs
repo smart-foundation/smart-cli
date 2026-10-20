@@ -1130,7 +1130,7 @@ fn firewall_rule(sub: &[String], app: &mut App) -> i32 {
 }
 
 /// `net firewall stats` — the hit counters the contract's `FirewallRule.hitCount`
-/// @13 carries, aggregated client-side (measured, never assumed).
+/// carries, aggregated client-side (measured, never assumed).
 fn firewall_stats(app: &mut App) -> i32 {
     app.trace_named("Network", "getFirewallRules");
     let bytes = match super::call(app, "Network", "getFirewallRules", &pagination(0, 512)) {

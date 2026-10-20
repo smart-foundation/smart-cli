@@ -16,7 +16,7 @@
 //!
 //! `help` lists nothing that cannot run on this host. Availability comes from
 //! the service's own answer through cli.capnp's registry (`listUnavailable`
-//! @13) — a registered command that is not currently runnable, with the reason
+//! — a registered command that is not currently runnable, with the reason
 //! it cannot run and why. A command that is not runnable is HIDDEN from help
 //! and, if invoked, answers exit `3` with the reason printed and in the JSON
 //! `error` object. `net registry list-unavailable` shows the hidden ones.
@@ -53,6 +53,48 @@ pub const EXIT_TABLE: &[(i32, &str)] = &[
     (EXIT_PERMISSION, "permission denied: the capability is not held"),
     (EXIT_TIMEOUT, "the service did not answer in time"),
 ];
+
+/// True when this build implements the command the service published.
+///
+/// The comparison is by **identity**, not by path: a service and a client may
+/// spell the same command differently ("interfaces" vs "interfaces up down
+/// mtu"), but if the command routes through a method this build calls, this
+/// build implements it. The path is the fallback, for a service that
+/// published a command with no identity at all.
+pub fn implements(command: &Command) -> bool {
+    if TASKS.iter().any(|spec| {
+        spec.calls
+            .iter()
+            .any(|(interface, method)| *interface == command.interface && *method == command.method)
+    }) {
+        return true;
+    }
+    task_lines().iter().any(|line| line == &command.path)
+}
+
+/// The registry table's task lines, as help prints them (one source of truth
+/// with the completion generator).
+pub fn task_lines() -> Vec<String> {
+    TASKS
+        .iter()
+        .map(|spec| {
+            let task = spec.task.first().copied().unwrap_or("");
+            if spec.verbs.is_empty() {
+                task.to_string()
+            } else {
+                format!(
+                    "{task} {}",
+                    spec.verbs
+                        .iter()
+                        .filter(|v| !v.starts_with("--"))
+                        .cloned()
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                )
+            }
+        })
+        .collect()
+}
 
 /// The exit code for a completed call, per the table. Total over `CallError`.
 #[cfg(feature = "std")]
@@ -146,6 +188,61 @@ impl Command {
     pub fn route(&self) -> String {
         format!("{}.{}.{}", self.schema_id, self.interface, self.method)
     }
+
+    /// The **method's identity**: the capnp ordinal the service published for
+    /// this command, in the registration's open metadata.
+    ///
+    /// The contract's `CommandRegistration` names the method but has no field
+    /// for its ordinal, so a service publishes it under the `methodId` key.
+    /// `None` when the service published none — the caller then falls back to
+    /// the schema tree's own `codeOrder`, and says so if neither knows.
+    pub fn method_id(&self) -> Option<u16> {
+        self.metadata
+            .iter()
+            .find(|(key, _)| key == METADATA_METHOD_ID)
+            .and_then(|(_, value)| value.trim().parse::<u16>().ok())
+    }
+
+    /// The **schema's node tree**, as the service published it (hex), in the
+    /// registration's open metadata.
+    pub fn schema_tree(&self) -> Option<Vec<u8>> {
+        self.metadata
+            .iter()
+            .find(|(key, _)| key == METADATA_SCHEMA_TREE)
+            .and_then(|(_, value)| decode_hex(value))
+    }
+}
+
+/// The metadata key the **method's ordinal** is published under.
+///
+/// The same key, with the same meaning, in the service that publishes it (the
+/// engine's `serve::cli`) and in the client that reads it: the contract's
+/// `CommandRegistration` has no field for the ordinal, so the contract's open
+/// metadata map carries it.
+pub const METADATA_METHOD_ID: &str = "methodId";
+
+/// The metadata key the **schema's node tree** is published under.
+///
+/// The tree is the contract's own `CodeGeneratorRequest` for the schema, hex
+/// encoded. It is what lets a client that NEVER compiled the schema address
+/// its methods.
+pub const METADATA_SCHEMA_TREE: &str = "capnpSchema";
+
+/// Decode a hex string into bytes. `None` when the text is not hex — never a
+/// partial decode.
+fn decode_hex(text: &str) -> Option<Vec<u8>> {
+    let text = text.trim();
+    if text.len() % 2 != 0 {
+        return None;
+    }
+    let bytes = text.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len() / 2);
+    for pair in bytes.chunks(2) {
+        let hi = (pair[0] as char).to_digit(16)?;
+        let lo = (pair[1] as char).to_digit(16)?;
+        out.push(((hi << 4) | lo) as u8);
+    }
+    Some(out)
 }
 
 /// The service's own registry: the commands it publishes and the ones it
@@ -196,8 +293,8 @@ impl ServiceRegistry {
     }
 }
 
-/// Read the service's registry through cli.capnp (`listCommands` @12 and
-/// `listUnavailable` @13). Both ids come from the GENERATED table.
+/// Read the service's registry through cli.capnp (`listCommands` and
+/// `listUnavailable`). Both ids come from the GENERATED table.
 ///
 /// `None` when the service does not serve cli.capnp at all — a bare network
 /// daemon. The CLI is then honest that it cannot verify the surface.
@@ -435,8 +532,70 @@ pub struct TaskSpec {
     pub verbs: &'static [&'static str],
     /// The flags this task's grammar accepts, beyond the global flags.
     pub flags: &'static [&'static str],
-    /// The contract route, for `--verbose` help (schema identity, one line).
-    pub route: &'static str,
+    /// The contract calls this task makes, by (interface, method) NAME.
+    ///
+    /// The **ordinals are never written here**: they are read from the
+    /// GENERATED contract table (`crate::contract`), which build.rs derives
+    /// from the schema tree. A task that names a method this build did not
+    /// compile says so in its route line — never a guessed ordinal.
+    pub calls: &'static [(&'static str, &'static str)],
+    /// How the task reaches the contract.
+    pub kind: RouteKind,
+}
+
+/// How a task reaches the contract.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RouteKind {
+    /// One call on the contract: a read.
+    Read,
+    /// Several calls on the contract: a composition.
+    Compose,
+    /// The contract declares nothing for this task (the reason is named).
+    Gap(&'static str),
+    /// A CLI-local workflow: no contract call at all.
+    Local(&'static str),
+}
+
+/// The route of a task: the schema identity of every call it makes, with the
+/// ordinals read from the GENERATED contract table.
+///
+/// This is the fallback table's route — "the registry compiled in from the
+/// schemas". A method ordinal is never written by hand anywhere in this
+/// crate; the table names methods, and the schema names their ids.
+pub fn route(spec: &TaskSpec) -> String {
+    match spec.kind {
+        RouteKind::Gap(reason) => format!("GAP: {reason}"),
+        RouteKind::Local(reason) => format!("CLI-local: {reason}"),
+        RouteKind::Read | RouteKind::Compose => {
+            let label = if spec.kind == RouteKind::Compose {
+                "C"
+            } else {
+                "R"
+            };
+            let calls: Vec<String> = spec
+                .calls
+                .iter()
+                .map(|(interface, method)| {
+                    format!("{interface}.{method} {}", method_id_of(interface, method))
+                })
+                .collect();
+            format!("{label} {}", calls.join(" / "))
+        }
+    }
+}
+
+/// The capnp method id of one method, from the GENERATED contract table.
+///
+/// `None` when this build did not compile the schema that declares it — the
+/// route line then says so, rather than showing an ordinal it does not know.
+fn method_id_of(interface: &str, method: &str) -> String {
+    let Some(info) = crate::contract::interface_named(interface) else {
+        return "(not compiled in this build)".to_string();
+    };
+    match crate::contract::method_id(info.stem, info.name, method) {
+        Some(id) => format!("@{id}"),
+        None => "(not compiled in this build)".to_string(),
+    }
 }
 
 /// The global flags every invocation accepts (the connect + mode law).
@@ -456,71 +615,75 @@ pub const SELECTOR_FLAG: &str = "--where";
 pub const WATCH_FLAGS: &[&str] = &["--count", "--interval", "--follow"];
 
 /// Every command this build implements, in the order help prints them.
+///
+/// The table names the contract calls each task makes; the ORDINALS behind
+/// those names are read from the generated contract table (`route`), so no
+/// method id is ever written by hand in this crate.
 pub const TASKS: &[TaskSpec] = &[
-    TaskSpec { task: &["status"], verbs: &[], flags: &[], route: "C isNetworkingEnabled + listRadioStates + getInterfaces" },
+    TaskSpec { task: &["status"], verbs: &[], flags: &[], calls: &[("Network", "isNetworkingEnabled"), ("Network", "listRadioStates"), ("Network", "getInterfaces")], kind: RouteKind::Compose },
     #[cfg(feature = "cmd-net")]
-    TaskSpec { task: &["info", "connected", "type"], verbs: &[], flags: &[], route: "C getInterfaces + getStatus" },
+    TaskSpec { task: &["info", "connected", "type"], verbs: &[], flags: &[], calls: &[("Network", "getInterfaces"), ("Network", "getStatus")], kind: RouteKind::Compose },
     #[cfg(feature = "cmd-net")]
-    TaskSpec { task: &["interfaces", "interface", "iface"], verbs: &["up", "down", "mtu"], flags: &[SELECTOR_FLAG], route: "R getInterfaces / getStatus / upInterface / downInterface / setInterfaceMtu" },
+    TaskSpec { task: &["interfaces", "interface", "iface"], verbs: &["up", "down", "mtu"], flags: &[SELECTOR_FLAG], calls: &[("Network", "getInterfaces"), ("Network", "getStatus"), ("Network", "upInterface"), ("Network", "downInterface"), ("Network", "setInterfaceMtu")], kind: RouteKind::Read },
     #[cfg(feature = "cmd-net")]
-    TaskSpec { task: &["ip", "ip4", "ip6"], verbs: &[], flags: &[], route: "R getAddressAssignment (via getInterfaces)" },
+    TaskSpec { task: &["ip", "ip4", "ip6"], verbs: &[], flags: &[], calls: &[("Network", "getAddressAssignment"), ("Network", "getInterfaces")], kind: RouteKind::Read },
     #[cfg(feature = "cmd-net")]
-    TaskSpec { task: &["networking"], verbs: &["on", "off"], flags: &[], route: "R setNetworking @72 / isNetworkingEnabled @73" },
+    TaskSpec { task: &["networking"], verbs: &["on", "off"], flags: &[], calls: &[("Network", "setNetworking"), ("Network", "isNetworkingEnabled")], kind: RouteKind::Read },
     #[cfg(feature = "cmd-net")]
-    TaskSpec { task: &["wifi"], verbs: &["stats", "list", "scan", "on", "off", "connect", "disconnect", "forget"], flags: &[SELECTOR_FLAG], route: "R getStatus / listKnownWifiNetworks @78 / wifiScan @6 / setRadioEnabled @74 / wifiConnect @7 / wifiDisconnect @8 / forgetWifiNetwork @77" },
+    TaskSpec { task: &["wifi"], verbs: &["stats", "list", "scan", "on", "off", "connect", "disconnect", "forget"], flags: &[SELECTOR_FLAG], calls: &[("Network", "getStatus"), ("Network", "listKnownWifiNetworks"), ("Network", "wifiScan"), ("Network", "setRadioEnabled"), ("Network", "wifiConnect"), ("Network", "wifiDisconnect"), ("Network", "forgetWifiNetwork")], kind: RouteKind::Read },
     #[cfg(feature = "cmd-net")]
-    TaskSpec { task: &["scan"], verbs: &[], flags: &[SELECTOR_FLAG], route: "R wifiScan @6" },
+    TaskSpec { task: &["scan"], verbs: &[], flags: &[SELECTOR_FLAG], calls: &[("Network", "wifiScan")], kind: RouteKind::Read },
     #[cfg(feature = "cmd-net")]
-    TaskSpec { task: &["connect"], verbs: &[], flags: &[], route: "R wifiConnect @7" },
+    TaskSpec { task: &["connect"], verbs: &[], flags: &[], calls: &[("Network", "wifiConnect")], kind: RouteKind::Read },
     #[cfg(feature = "cmd-net")]
-    TaskSpec { task: &["disconnect"], verbs: &[], flags: &[], route: "R wifiDisconnect @8" },
+    TaskSpec { task: &["disconnect"], verbs: &[], flags: &[], calls: &[("Network", "wifiDisconnect")], kind: RouteKind::Read },
     #[cfg(feature = "cmd-net")]
-    TaskSpec { task: &["forget"], verbs: &[], flags: &[], route: "R forgetWifiNetwork @77" },
+    TaskSpec { task: &["forget"], verbs: &[], flags: &[], calls: &[("Network", "forgetWifiNetwork")], kind: RouteKind::Read },
     #[cfg(feature = "cmd-net")]
-    TaskSpec { task: &["dns"], verbs: &["get", "set", "resolve", "reverse", "bench", "flush", "cache", "config"], flags: &["--auto"], route: "R getDnsServers @31 / setDnsServers @32 (+ dns.capnp: resolve/reverse/bench/flush/cache/config)" },
+    TaskSpec { task: &["dns"], verbs: &["get", "set", "resolve", "reverse", "bench", "flush", "cache", "config"], flags: &["--auto"], calls: &[("Network", "getDnsServers"), ("Network", "setDnsServers"), ("DnsService", "resolve"), ("DnsService", "reverseResolve"), ("DnsService", "cacheStatus"), ("DnsService", "flushCache"), ("DnsService", "getConfig"), ("DnsService", "setConfig")], kind: RouteKind::Read },
     #[cfg(feature = "cmd-net")]
-    TaskSpec { task: &["routes", "route"], verbs: &["list", "add", "remove", "default"], flags: &[SELECTOR_FLAG, "--metric"], route: "R getRoutes @79 / setRoutes @80" },
+    TaskSpec { task: &["routes", "route"], verbs: &["list", "add", "remove", "default"], flags: &[SELECTOR_FLAG, "--metric"], calls: &[("Network", "getRoutes"), ("Network", "setRoutes")], kind: RouteKind::Read },
     #[cfg(feature = "cmd-net")]
-    TaskSpec { task: &["firewall"], verbs: &["rules", "rule", "allow", "deny", "stats"], flags: &[SELECTOR_FLAG, "--direction", "--action", "--protocol", "--port", "--priority"], route: "R getFirewallRules @57 / setFirewallRules @56" },
+    TaskSpec { task: &["firewall"], verbs: &["rules", "rule", "allow", "deny", "stats"], flags: &[SELECTOR_FLAG, "--direction", "--action", "--protocol", "--port", "--priority"], calls: &[("Network", "getFirewallRules"), ("Network", "setFirewallRules")], kind: RouteKind::Read },
     #[cfg(feature = "cmd-net")]
-    TaskSpec { task: &["rule"], verbs: &["add", "remove", "enable", "disable"], flags: &["--direction", "--action", "--protocol", "--port", "--priority"], route: "R getFirewallRules @57 / setFirewallRules @56" },
+    TaskSpec { task: &["rule"], verbs: &["add", "remove", "enable", "disable"], flags: &["--direction", "--action", "--protocol", "--port", "--priority"], calls: &[("Network", "getFirewallRules"), ("Network", "setFirewallRules")], kind: RouteKind::Read },
     #[cfg(feature = "cmd-net")]
-    TaskSpec { task: &["proxy"], verbs: &["get", "set", "off"], flags: &[], route: "R getProxyConfig @81 / setProxyConfig @82" },
+    TaskSpec { task: &["proxy"], verbs: &["get", "set", "off"], flags: &[], calls: &[("Network", "getProxyConfig"), ("Network", "setProxyConfig")], kind: RouteKind::Read },
     #[cfg(feature = "cmd-net")]
-    TaskSpec { task: &["ping"], verbs: &[], flags: &[], route: "R ping @54" },
+    TaskSpec { task: &["ping"], verbs: &[], flags: &[], calls: &[("Network", "ping")], kind: RouteKind::Read },
     #[cfg(feature = "cmd-net")]
-    TaskSpec { task: &["traceroute", "trace"], verbs: &[], flags: &[], route: "R traceroute @55" },
+    TaskSpec { task: &["traceroute", "trace"], verbs: &[], flags: &[], calls: &[("Network", "traceroute")], kind: RouteKind::Read },
     #[cfg(feature = "cmd-net")]
-    TaskSpec { task: &["bandwidth", "usage"], verbs: &[], flags: &[], route: "R getCounters @35" },
+    TaskSpec { task: &["bandwidth", "usage"], verbs: &[], flags: &[], calls: &[("Network", "getCounters")], kind: RouteKind::Read },
     #[cfg(feature = "cmd-net")]
-    TaskSpec { task: &["watch"], verbs: &["bandwidth", "status"], flags: &[], route: "R subscribeCounters @37 / subscribeStatus @2 (+ pull/cancel)" },
+    TaskSpec { task: &["watch"], verbs: &["bandwidth", "status"], flags: &[], calls: &[("Network", "subscribeCounters"), ("Network", "subscribeStatus")], kind: RouteKind::Read },
     #[cfg(feature = "cmd-net")]
-    TaskSpec { task: &["vpn"], verbs: &["list"], flags: &[], route: "R listVpnProfiles @17" },
+    TaskSpec { task: &["vpn"], verbs: &["list"], flags: &[], calls: &[("Network", "listVpnProfiles")], kind: RouteKind::Read },
     #[cfg(feature = "cmd-net")]
-    TaskSpec { task: &["diagnose"], verbs: &[], flags: &[], route: "C summary + status + counters + dns + routes" },
+    TaskSpec { task: &["diagnose"], verbs: &[], flags: &[], calls: &[("Network", "getStatus"), ("Network", "getCounters"), ("Network", "getDnsServers"), ("Network", "getRoutes")], kind: RouteKind::Compose },
     #[cfg(feature = "cmd-net")]
-    TaskSpec { task: &["connections", "ports"], verbs: &[SELECTOR_FLAG], flags: &[SELECTOR_FLAG], route: "GAP: socket.capnp declares no all-sockets enumeration (socket batch)" },
+    TaskSpec { task: &["connections", "ports"], verbs: &[SELECTOR_FLAG], flags: &[SELECTOR_FLAG], calls: &[], kind: RouteKind::Gap("socket.capnp declares no all-sockets enumeration (socket batch)") },
     #[cfg(feature = "cmd-net")]
-    TaskSpec { task: &["profile"], verbs: &["apply", "list"], flags: &["--file"], route: "CLI-local workflow (doc 04 §5) over wifiConnect/setDnsServers/setProxyConfig/setRoutes" },
+    TaskSpec { task: &["profile"], verbs: &["apply", "list"], flags: &["--file"], calls: &[("Network", "wifiConnect"), ("Network", "setDnsServers"), ("Network", "setProxyConfig"), ("Network", "setRoutes")], kind: RouteKind::Local("workflow (doc 04 §5) over the contract's own mutators") },
     #[cfg(feature = "cmd-net")]
-    TaskSpec { task: &["export"], verbs: &[], flags: &[], route: "CLI-local (doc 04 §5): the state file on stdout" },
+    TaskSpec { task: &["export"], verbs: &[], flags: &[], calls: &[], kind: RouteKind::Local("workflow (doc 04 §5): the state file on stdout") },
     #[cfg(feature = "cmd-net")]
-    TaskSpec { task: &["import"], verbs: &[], flags: &[], route: "CLI-local (doc 04 §5) over the contract's own mutators" },
+    TaskSpec { task: &["import"], verbs: &[], flags: &[], calls: &[("Network", "wifiConnect"), ("Network", "setDnsServers"), ("Network", "setProxyConfig"), ("Network", "setRoutes")], kind: RouteKind::Local("workflow (doc 04 §5) over the contract's own mutators") },
     #[cfg(feature = "cmd-socket")]
-    TaskSpec { task: &["socket"], verbs: &["create", "info", "name", "close"], flags: &[], route: "R SocketService create @0 / getInfo @11 / getSocketName @19 / close @17" },
+    TaskSpec { task: &["socket"], verbs: &["create", "info", "name", "close"], flags: &[], calls: &[("SocketService", "create"), ("SocketService", "getInfo"), ("SocketService", "getSocketName"), ("SocketService", "close")], kind: RouteKind::Read },
     #[cfg(feature = "cmd-dns")]
-    TaskSpec { task: &["resolve"], verbs: &["--type"], flags: &["--type"], route: "R DnsService.resolve @0" },
+    TaskSpec { task: &["resolve"], verbs: &["--type"], flags: &["--type"], calls: &[("DnsService", "resolve")], kind: RouteKind::Read },
     #[cfg(feature = "cmd-dns")]
-    TaskSpec { task: &["reverse"], verbs: &[], flags: &[], route: "R DnsService.reverseResolve @2" },
+    TaskSpec { task: &["reverse"], verbs: &[], flags: &[], calls: &[("DnsService", "reverseResolve")], kind: RouteKind::Read },
     #[cfg(feature = "cmd-bt")]
-    TaskSpec { task: &["bluetooth", "bt"], verbs: &["status", "on", "off", "name", "devices"], flags: &[], route: "R BluetoothService getState @0 / enable @1 / disable @2 / name @3-4 / getPairedDevices @8" },
+    TaskSpec { task: &["bluetooth", "bt"], verbs: &["status", "on", "off", "name", "devices"], flags: &[], calls: &[("BluetoothService", "getState"), ("BluetoothService", "enable"), ("BluetoothService", "disable"), ("BluetoothService", "setName"), ("BluetoothService", "getName"), ("BluetoothService", "getPairedDevices")], kind: RouteKind::Read },
     #[cfg(feature = "cmd-tunnel")]
-    TaskSpec { task: &["tunnel"], verbs: &["open", "info", "close"], flags: &["--name"], route: "R TunnelService open @0 / getInfo @10 / close @6" },
+    TaskSpec { task: &["tunnel"], verbs: &["open", "info", "close"], flags: &["--name"], calls: &[("TunnelService", "open"), ("TunnelService", "getInfo"), ("TunnelService", "close")], kind: RouteKind::Read },
     #[cfg(feature = "cmd-web")]
-    TaskSpec { task: &["web"], verbs: &["get", "post", "put", "patch", "delete", "resolve"], flags: &[], route: "R WebService.fetch @0 / resolveUrl @3" },
+    TaskSpec { task: &["web"], verbs: &["get", "post", "put", "patch", "delete", "resolve"], flags: &[], calls: &[("WebService", "fetch"), ("WebService", "resolveUrl")], kind: RouteKind::Read },
     #[cfg(feature = "cmd-discovery")]
-    TaskSpec { task: &["discovery"], verbs: &["peers", "resolve"], flags: &[], route: "R Discovery.lookup @0 / resolve @2" },
-    TaskSpec { task: &["registry"], verbs: &["list-unavailable"], flags: &[], route: "R cli.capnp listUnavailable @13" },
+    TaskSpec { task: &["discovery"], verbs: &["peers", "resolve"], flags: &[], calls: &[("Discovery", "lookup"), ("Discovery", "resolve")], kind: RouteKind::Read },
+    TaskSpec { task: &["registry"], verbs: &["list-unavailable"], flags: &[], calls: &[("CliService", "listUnavailable")], kind: RouteKind::Read },
 ];
 
 /// Every task word this build implements (the first word a user types).

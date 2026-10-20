@@ -15,6 +15,9 @@ pub mod agent_scenario;
 /// dependency of this crate is the contract).
 pub mod json;
 
+/// The test-local JSON SHAPE helper (the key paths a document carries).
+pub mod shape;
+
 /// The FIXTURE schema's generated bindings — for the TEST SUPPORT only.
 ///
 /// This is the proof of the generic path: the CLI's LIBRARY has no binding for
