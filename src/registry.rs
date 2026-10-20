@@ -71,6 +71,8 @@ pub fn exit_code_for(result: &Result<Vec<u8>, CallError>) -> i32 {
             }
         }
         Err(CallError::Transport(_)) => EXIT_CALL_FAILED,
+        // "This host cannot run it" is the published table's row 3.
+        Err(CallError::Unavailable { .. }) => EXIT_UNAVAILABLE,
     }
 }
 
@@ -109,17 +111,103 @@ pub enum Availability {
     Unpublished,
 }
 
+/// The contract's CLI interface, by its GENERATED identity.
 #[cfg(feature = "std")]
-/// Read the service's unavailable-command list through cli.capnp `listUnavailable`
-/// @13. This is the ONLY startup query, and only for help/registry views — the
-/// CLI adds no call to a normal command's hot path.
-pub fn list_unavailable(conn: &mut Connection) -> Availability {
-    use crate::transport::{decode_message, encode_message};
-    let cli_id = match crate::contract::schema_id("cli") {
-        Some(id) => id,
-        None => return Availability::Unpublished,
-    };
+fn cli_interface() -> Option<(u64, u16)> {
+    let info = crate::contract::interface_named("CliService")?;
+    let list_commands = crate::contract::method_id(info.stem, info.name, "listCommands")?;
+    Some((info.type_id, list_commands))
+}
 
+/// One command the service publishes in its registry (cli.capnp
+/// `CommandRegistration`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Command {
+    /// The command path the user types (e.g. "wifi scan").
+    pub path: String,
+    /// The schema the command's contract lives in (the canonical schema id).
+    pub schema_id: u64,
+    /// The contract interface the command calls.
+    pub interface: String,
+    /// The method the command calls, as the schema spells it.
+    pub method: String,
+    /// The presentation domain the service groups it under.
+    pub domain: String,
+    /// The service's one-line summary.
+    pub summary: String,
+    /// The registration's metadata (the contract's open string map): this is
+    /// where a service publishes what the contract does not carry, such as
+    /// the schema's node tree for a schema this client never compiled.
+    pub metadata: Vec<(String, String)>,
+}
+
+impl Command {
+    /// The command's route, as the audit trail names it.
+    pub fn route(&self) -> String {
+        format!("{}.{}.{}", self.schema_id, self.interface, self.method)
+    }
+}
+
+/// The service's own registry: the commands it publishes and the ones it
+/// reports as not runnable right now.
+///
+/// This is the CONTRACT's registry (cli.capnp), read over the contract's own
+/// call model. It is the source of the command surface: the list, the help,
+/// the completions and the unavailable list all come from here when the
+/// service publishes it — never from a hand-written table.
+#[derive(Clone, Debug, Default)]
+pub struct ServiceRegistry {
+    /// The published commands.
+    pub commands: Vec<Command>,
+    /// The published unavailable list.
+    pub unavailable: Vec<Unavailable>,
+}
+
+impl ServiceRegistry {
+    /// The command the user typed, if the service published it.
+    pub fn command(&self, path: &str) -> Option<&Command> {
+        self.commands.iter().find(|c| c.path == path)
+    }
+
+    /// The task words the published commands start with.
+    pub fn task_words(&self) -> Vec<&str> {
+        let mut words: Vec<&str> = Vec::new();
+        for command in &self.commands {
+            if let Some((first, _)) = command.path.split_once(' ') {
+                if !words.contains(&first) {
+                    words.push(first);
+                }
+            }
+        }
+        words
+    }
+
+    /// The verbs the published commands accept under one task word.
+    pub fn verbs_for(&self, task: &str) -> Vec<&str> {
+        let mut verbs: Vec<&str> = Vec::new();
+        for command in &self.commands {
+            if let Some((first, rest)) = command.path.split_once(' ') {
+                if first == task && !verbs.contains(&rest) {
+                    verbs.push(rest);
+                }
+            }
+        }
+        verbs
+    }
+}
+
+/// Read the service's registry through cli.capnp (`listCommands` @12 and
+/// `listUnavailable` @13). Both ids come from the GENERATED table.
+///
+/// `None` when the service does not serve cli.capnp at all — a bare network
+/// daemon. The CLI is then honest that it cannot verify the surface.
+#[cfg(feature = "std")]
+pub fn fetch(conn: &mut Connection) -> Option<ServiceRegistry> {
+    let (interface_id, list_commands) = cli_interface()?;
+    let list_unavailable = crate::contract::method_id("cli", "CliService", "listUnavailable")?;
+    let mut registry = ServiceRegistry::default();
+
+    // The unavailable list.
     let mut message = capnp::message::Builder::new_default();
     {
         let mut params = message.init_root::<cli_service::list_unavailable_params::Builder<'_>>();
@@ -127,55 +215,185 @@ pub fn list_unavailable(conn: &mut Connection) -> Availability {
         page.set_offset(0);
         page.set_limit(u32::MAX);
     }
-    let payload = encode_message(&message);
-    let result = conn.call(cli_id, 13, &payload);
-    let bytes = match result {
-        Ok(bytes) => bytes,
-        // A daemon that does not run the registry service answers
-        // unknown-interface here; honest, not a failure to list.
-        Err(_) => return Availability::Unpublished,
-    };
-    let Ok(reader) = decode_message::<cli_service::list_unavailable_results::Owned>(&bytes) else {
-        return Availability::Unpublished;
-    };
-    let Ok(results) = reader.get() else {
-        return Availability::Unpublished;
-    };
-    let mut list = Vec::new();
+    let payload = crate::transport::encode_message(&message);
+    if let Ok(bytes) = conn.call(interface_id, list_unavailable, &payload) {
+        if let Ok(reader) =
+            crate::transport::decode_message::<cli_service::list_unavailable_results::Owned>(&bytes)
+        {
+            if let Ok(results) = reader.get() {
+                for registration in results.get_commands().into_iter().flatten() {
+                    let path = registration
+                        .get_command_path()
+                        .map(|t| String::from_utf8_lossy(t.as_bytes()).into_owned())
+                        .unwrap_or_default();
+                    let name = reason_token(registration.get_unavailable_reason());
+                    let mut reason_text = String::new();
+                    if let Ok(metadata) = registration.get_metadata() {
+                        for entry in metadata.get_entries().into_iter().flatten() {
+                            if let (Ok(key), Ok(value)) = (entry.get_key(), entry.get_value()) {
+                                if key.to_str().unwrap_or("") == "reason" {
+                                    reason_text = value.to_str().unwrap_or("").to_string();
+                                }
+                            }
+                        }
+                    }
+                    registry.unavailable.push(Unavailable {
+                        path,
+                        reason_class: name.to_string(),
+                        reason: reason_text,
+                    });
+                }
+            }
+        }
+    }
+
+    // The published command list.
+    let mut message = capnp::message::Builder::new_default();
+    {
+        let mut params = message.init_root::<cli_service::list_commands_params::Builder<'_>>();
+        let mut page = params.reborrow().init_pagination();
+        page.set_offset(0);
+        page.set_limit(u32::MAX);
+    }
+    let payload = crate::transport::encode_message(&message);
+    let bytes = conn.call(interface_id, list_commands, &payload).ok()?;
+    let reader =
+        crate::transport::decode_message::<cli_service::list_commands_results::Owned>(&bytes).ok()?;
+    let results = reader.get().ok()?;
     for registration in results.get_commands().into_iter().flatten() {
         let path = registration
             .get_command_path()
             .map(|t| String::from_utf8_lossy(t.as_bytes()).into_owned())
             .unwrap_or_default();
-    use crate::schema::cli_capnp::AvailabilityReason as R;
-    if let Ok(reason) = registration.get_unavailable_reason() {
-        let name = match reason {
-            R::Available => "available",
-            R::CapabilityDenied => "capabilityDenied",
-            R::ServiceUnavailable => "serviceUnavailable",
-            R::UnsupportedPlatform => "unsupportedPlatform",
-            R::Unknown => "unknown",
-            R::DisabledByPolicy => "disabledByPolicy",
-            R::Custom => "custom",
-        };
-        let mut reason_text = String::new();
-        if let Ok(metadata) = registration.get_metadata() {
-            for entry in metadata.get_entries().into_iter().flatten() {
-                if let (Ok(key), Ok(value)) = (entry.get_key(), entry.get_value()) {
-                    if key.to_str().unwrap_or("") == "reason" {
-                        reason_text = value.to_str().unwrap_or("").to_string();
-                    }
-                }
+        let schema_id = registration
+            .get_schema_id()
+            .map(|s| s.get_id())
+            .unwrap_or_default();
+        let interface = registration
+            .get_interface_name()
+            .map(|t| String::from_utf8_lossy(t.as_bytes()).into_owned())
+            .unwrap_or_default();
+        let method = registration
+            .get_method_name()
+            .map(|t| String::from_utf8_lossy(t.as_bytes()).into_owned())
+            .unwrap_or_default();
+        let mut domain = String::new();
+        let mut summary = String::new();
+        if let Ok(presentation) = registration.get_presentation() {
+            if let Ok(text) = presentation.get_domain() {
+                domain = String::from_utf8_lossy(text.as_bytes()).into_owned();
+            }
+            if let Ok(text) = presentation.get_summary() {
+                summary = String::from_utf8_lossy(text.as_bytes()).into_owned();
             }
         }
-        list.push(Unavailable {
+        let mut metadata = Vec::new();
+        if let Ok(map) = registration.get_metadata() {
+            for entry in map.get_entries().into_iter().flatten() {
+                let key = entry
+                    .get_key()
+                    .map(|t| String::from_utf8_lossy(t.as_bytes()).into_owned())
+                    .unwrap_or_default();
+                let value = entry
+                    .get_value()
+                    .map(|t| String::from_utf8_lossy(t.as_bytes()).into_owned())
+                    .unwrap_or_default();
+                metadata.push((key, value));
+            }
+        }
+        registry.commands.push(Command {
             path,
-            reason_class: name.to_string(),
-            reason: reason_text,
+            schema_id,
+            interface,
+            method,
+            domain,
+            summary,
+            metadata,
         });
     }
+    Some(registry)
+}
+
+/// The stable token of a reason class (cli.capnp `AvailabilityReason`).
+#[cfg(feature = "std")]
+fn reason_token(
+    reason: std::result::Result<crate::schema::cli_capnp::AvailabilityReason, capnp::NotInSchema>,
+) -> &'static str {
+    use crate::schema::cli_capnp::AvailabilityReason as R;
+    match reason {
+        Ok(R::Available) => "available",
+        Ok(R::CapabilityDenied) => "capabilityDenied",
+        Ok(R::ServiceUnavailable) => "serviceUnavailable",
+        Ok(R::UnsupportedPlatform) => "unsupportedPlatform",
+        Ok(R::Unknown) => "unknown",
+        Ok(R::DisabledByPolicy) => "disabledByPolicy",
+        Ok(R::Custom) => "custom",
+        Err(_) => "unknown",
     }
-    Availability::Published(list)
+}
+
+/// Read the service's unavailable-command list through cli.capnp
+/// `listUnavailable`. This is the ONLY startup query, and only for
+/// help/registry views — the CLI adds no call to a normal command's hot path.
+#[cfg(feature = "std")]
+pub fn list_unavailable(conn: &mut Connection) -> Availability {
+    let (interface_id, _) = match cli_interface() {
+        Some(ids) => ids,
+        None => return Availability::Unpublished,
+    };
+    let Some(list_unavailable) = crate::contract::method_id("cli", "CliService", "listUnavailable")
+    else {
+        return Availability::Unpublished;
+    };
+    let mut message = capnp::message::Builder::new_default();
+    {
+        let mut params = message.init_root::<cli_service::list_unavailable_params::Builder<'_>>();
+        let mut page = params.reborrow().init_pagination();
+        page.set_offset(0);
+        page.set_limit(u32::MAX);
+    }
+    let payload = crate::transport::encode_message(&message);
+    match conn.call(interface_id, list_unavailable, &payload) {
+        Ok(bytes) => {
+            let Ok(reader) =
+                crate::transport::decode_message::<cli_service::list_unavailable_results::Owned>(
+                    &bytes,
+                )
+            else {
+                return Availability::Unpublished;
+            };
+            let Ok(results) = reader.get() else {
+                return Availability::Unpublished;
+            };
+            let mut list = Vec::new();
+            for registration in results.get_commands().into_iter().flatten() {
+                let path = registration
+                    .get_command_path()
+                    .map(|t| String::from_utf8_lossy(t.as_bytes()).into_owned())
+                    .unwrap_or_default();
+                let name = reason_token(registration.get_unavailable_reason());
+                let mut reason_text = String::new();
+                if let Ok(metadata) = registration.get_metadata() {
+                    for entry in metadata.get_entries().into_iter().flatten() {
+                        if let (Ok(key), Ok(value)) = (entry.get_key(), entry.get_value()) {
+                            if key.to_str().unwrap_or("") == "reason" {
+                                reason_text = value.to_str().unwrap_or("").to_string();
+                            }
+                        }
+                    }
+                }
+                list.push(Unavailable {
+                    path,
+                    reason_class: name.to_string(),
+                    reason: reason_text,
+                });
+            }
+            Availability::Published(list)
+        }
+        // A daemon that does not run the registry service answers
+        // unknown-interface here; honest, not a failure to list.
+        Err(_) => Availability::Unpublished,
+    }
 }
 
 /// True when `command_path` is reported not runnable by `availability`.

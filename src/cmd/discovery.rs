@@ -28,7 +28,7 @@ pub fn run(sub: &[String], app: &mut App) -> i32 {
                 let mut p = m.init_root::<wire::lookup_params::Builder<'_>>();
                 let _ = p.reborrow().init_filter();
             });
-            go(app, "Discovery", "lookup", 0, &params, Handler { json: discovery_peers, human: discovery_peers_human })
+            go(app, "Discovery", "lookup", &params, Handler { json: discovery_peers, human: discovery_peers_human })
         }
         "resolve" => {
             let Some(name) = rest.first().cloned() else {
@@ -36,7 +36,7 @@ pub fn run(sub: &[String], app: &mut App) -> i32 {
                 return crate::registry::EXIT_USAGE;
             };
             let params = msg(|m| { m.init_root::<wire::resolve_params::Builder<'_>>().set_name(&name); });
-            go(app, "Discovery", "resolve", 2, &params, Handler { json: discovery_resolve, human: discovery_resolve_human })
+            go(app, "Discovery", "resolve", &params, Handler { json: discovery_resolve, human: discovery_resolve_human })
         }
         other => {
             super::usage_error_app(app, &format!("unknown discovery task '{other}' (peers|resolve)"));

@@ -37,16 +37,16 @@ pub fn run(sub: &[String], app: &mut App) -> i32 {
             app, "Bluetooth", "getState", 0, &msg(|m| { m.init_root::<wire::get_state_params::Builder<'_>>(); }),
             Handler { json: |b, o| bt_state(b, o), human: |b| bt_state_human(b) },
         ),
-        "on" | "enable" => go(app, "Bluetooth", "enable", 1, &msg(|m| { m.init_root::<wire::enable_params::Builder<'_>>(); }), super::VOID),
-        "off" | "disable" => go(app, "Bluetooth", "disable", 2, &msg(|m| { m.init_root::<wire::disable_params::Builder<'_>>(); }), super::VOID),
+        "on" | "enable" => go(app, "BluetoothService", "enable", &msg(|m| { m.init_root::<wire::enable_params::Builder<'_>>(); }), super::VOID),
+        "off" | "disable" => go(app, "BluetoothService", "disable", &msg(|m| { m.init_root::<wire::disable_params::Builder<'_>>(); }), super::VOID),
         "name" => match rest.first().map(String::as_str) {
-            None => go(app, "Bluetooth", "getName", 4, &msg(|m| { m.init_root::<wire::get_name_params::Builder<'_>>(); }), Handler { json: bt_name, human: bt_name_human }),
+            None => go(app, "BluetoothService", "getName", &msg(|m| { m.init_root::<wire::get_name_params::Builder<'_>>(); }), Handler { json: bt_name, human: bt_name_human }),
             Some(name) => {
                 let params = msg(|m| { m.init_root::<wire::set_name_params::Builder<'_>>().set_name(name); });
-                go(app, "Bluetooth", "setName", 3, &params, super::VOID)
+                go(app, "BluetoothService", "setName", &params, super::VOID)
             }
         },
-        "devices" | "paired" => go(app, "Bluetooth", "getPairedDevices", 8, &bt_page(0, 256), Handler { json: bt_devices, human: bt_devices_human }),
+        "devices" | "paired" => go(app, "BluetoothService", "getPairedDevices", &bt_page(0, 256), Handler { json: bt_devices, human: bt_devices_human }),
         "scan" | "pair" | "connect" => {
             super::usage_error_app(app, "bluetooth scan/pair/connect are subscription capabilities; named, not half-routed this wave (the daemon mints the sub id)");
             crate::registry::EXIT_USAGE

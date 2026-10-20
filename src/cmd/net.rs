@@ -22,10 +22,6 @@ use crate::watch;
 
 use super::{go, go_with, App, Handler};
 
-fn net_id() -> u64 {
-    crate::contract::schema_id("network").unwrap_or(0)
-}
-
 /// Build + serialize a params/result message.
 fn msg<F>(f: F) -> Vec<u8>
 where
@@ -68,7 +64,7 @@ fn not_found(app: &App, what: &str) -> i32 {
 }
 
 fn first_interface(app: &mut App) -> u64 {
-    if let Ok(bytes) = app.conn().call(net_id(), 0, &pagination(0, 256)) {
+    if let Ok(bytes) = super::call(app, "Network", "getInterfaces", &pagination(0, 256)) {
         if let Ok(reader) = tp::decode_message::<wire::get_interfaces_results::Owned>(&bytes) {
             if let Ok(results) = reader.get() {
                 if let Some(it) = results.get_interfaces().into_iter().flatten().next() {
@@ -84,7 +80,7 @@ fn resolve_interface(app: &mut App, name: &str) -> Option<u64> {
     if let Ok(n) = name.parse::<u64>() {
         return Some(n);
     }
-    let bytes = app.conn().call(net_id(), 0, &pagination(0, 256)).ok()?;
+    let bytes = super::call(app, "Network", "getInterfaces", &pagination(0, 256)).ok()?;
     let reader = tp::decode_message::<wire::get_interfaces_results::Owned>(&bytes).ok()?;
     for it in reader.get().ok()?.get_interfaces().into_iter().flatten() {
         if it.get_name().map(|n| n.to_str().unwrap_or("")).unwrap_or("") == name {
@@ -138,12 +134,12 @@ pub fn run(sub: &[String], app: &mut App) -> i32 {
     match task {
         "status" | "info" | "connected" | "type" => dashboard(app),
         "interfaces" | "interface" | "iface" => interface_cmd(rest, app),
-        "ip" | "ip4" | "ip6" => go(app, "Network", "getInterfaces", 0, &pagination(0, 256), Handler { json: json_interfaces, human: human_ip }),
+        "ip" | "ip4" | "ip6" => go(app, "Network", "getInterfaces", &pagination(0, 256), Handler { json: json_interfaces, human: human_ip }),
         "networking" => networking_cmd(rest, app),
         "wifi" => wifi_cmd(rest, app),
         "scan" => wifi_cmd(&sub.to_vec(), app),
         "connect" => wifi_connect(rest.get(0).cloned().unwrap_or_default(), rest.get(1).cloned(), app),
-        "disconnect" => go(app, "Network", "wifiDisconnect", 8, &empty::<wire::wifi_disconnect_params::Owned>(), super::VOID),
+        "disconnect" => go(app, "Network", "wifiDisconnect", &empty::<wire::wifi_disconnect_params::Owned>(), super::VOID),
         "forget" => wifi_forget(rest.get(0).cloned().unwrap_or_default(), app),
         "dns" => dns_cmd(rest, app),
         "routes" | "route" => routes_cmd(rest, app),
@@ -169,6 +165,29 @@ pub fn run(sub: &[String], app: &mut App) -> i32 {
         "export" => export_cmd(app),
         "import" => import_cmd(rest, app),
         other => {
+            // The GENERIC path: a command the SERVICE published and this build
+            // never compiled. The registry names the method; the service
+            // publishes the schema; the CLI addresses the call from the
+            // contract's own introspection.
+            // The service's command paths name the family too ("net wifi
+            // scan"), so both spellings are tried.
+            let mut candidates = vec![other.to_string(), format!("net {other}")];
+            if let Some(verb) = rest.first() {
+                if !verb.starts_with('-') {
+                    candidates.push(format!("{other} {verb}"));
+                    candidates.push(format!("net {other} {verb}"));
+                }
+            }
+            for (index, path) in candidates.iter().enumerate() {
+                let args = if index == 0 {
+                    rest.to_vec()
+                } else {
+                    rest[1..].to_vec()
+                };
+                if let Some(code) = super::generic_command(app, path, &args) {
+                    return code;
+                }
+            }
             super::usage_error_app(app, &format!("unknown net task '{other}'"));
             crate::registry::EXIT_USAGE
         }
@@ -178,12 +197,12 @@ pub fn run(sub: &[String], app: &mut App) -> i32 {
 // ── dashboard ─────────────────────────────────────────────────────────────
 
 fn dashboard(app: &mut App) -> i32 {
-    app.trace("Network", "isNetworkingEnabled", 73);
-    let networking = app.conn().call(net_id(), 73, &empty::<wire::is_networking_enabled_params::Owned>());
-    app.trace("Network", "listRadioStates", 75);
-    let radios = app.conn().call(net_id(), 75, &pagination(0, 64));
-    app.trace("Network", "getInterfaces", 0);
-    let interfaces = app.conn().call(net_id(), 0, &pagination(0, 256));
+    app.trace_named("Network", "isNetworkingEnabled");
+    let networking = super::call(app, "Network", "isNetworkingEnabled", &empty::<wire::is_networking_enabled_params::Owned>());
+    app.trace_named("Network", "listRadioStates");
+    let radios = super::call(app, "Network", "listRadioStates", &pagination(0, 64));
+    app.trace_named("Network", "getInterfaces");
+    let interfaces = super::call(app, "Network", "getInterfaces", &pagination(0, 256));
     match (&networking, &radios, &interfaces) {
         (Ok(nb), Ok(rb), Ok(ib)) => {
             let enabled = read_bool(nb);
@@ -214,10 +233,10 @@ fn dashboard(app: &mut App) -> i32 {
 }
 
 fn diagnose_cmd(app: &mut App) -> i32 {
-    app.trace("Network", "isNetworkingEnabled", 73);
-    let networking = app.conn().call(net_id(), 73, &empty::<wire::is_networking_enabled_params::Owned>());
-    app.trace("Network", "getInterfaces", 0);
-    let interfaces = app.conn().call(net_id(), 0, &pagination(0, 256));
+    app.trace_named("Network", "isNetworkingEnabled");
+    let networking = super::call(app, "Network", "isNetworkingEnabled", &empty::<wire::is_networking_enabled_params::Owned>());
+    app.trace_named("Network", "getInterfaces");
+    let interfaces = super::call(app, "Network", "getInterfaces", &pagination(0, 256));
     match (&networking, &interfaces) {
         (Ok(nb), Ok(ib)) => {
             let enabled = read_bool(nb);
@@ -295,8 +314,8 @@ fn interface_cmd(sub: &[String], app: &mut App) -> i32 {
         return not_found(app, &format!("interface '{name}'"));
     };
     match args.get(1).map(String::as_str) {
-        Some("up") => lifecycle(app, "upInterface", 42, id),
-        Some("down") => lifecycle(app, "downInterface", 43, id),
+        Some("up") => lifecycle(app, "upInterface", id),
+        Some("down") => lifecycle(app, "downInterface", id),
         Some("mtu") => {
             let mtu = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(0);
             let params = msg(|m| {
@@ -304,14 +323,14 @@ fn interface_cmd(sub: &[String], app: &mut App) -> i32 {
                 p.reborrow().init_interface_id().set_id(id);
                 p.set_mtu(mtu);
             });
-            go(app, "Network", "setInterfaceMtu", 76, &params, super::VOID)
+            go(app, "Network", "setInterfaceMtu", &params, super::VOID)
         }
         None => {
             let params = msg(|m| {
                 let mut p = m.init_root::<wire::get_status_params::Builder<'_>>();
                 p.reborrow().init_interface_id().set_id(id);
             });
-            go(app, "Network", "getStatus", 1, &params, Handler { json: json_status, human: human_status })
+            go(app, "Network", "getStatus", &params, Handler { json: json_status, human: human_status })
         }
         Some(other) => {
             super::usage_error_app(app, &format!("unknown interface verb '{other}' (up|down|mtu <n>)"));
@@ -388,7 +407,7 @@ fn list_interfaces(app: &mut App, where_tokens: &[String]) -> i32 {
             }
         }
     };
-    let bytes = match app.conn().call(net_id(), 0, &pagination(0, 256)) {
+    let bytes = match super::call(app, "Network", "getInterfaces", &pagination(0, 256)) {
         Ok(bytes) => bytes,
         Err(e) => return super::emit_error(app, &e),
     };
@@ -433,13 +452,12 @@ fn list_interfaces(app: &mut App, where_tokens: &[String]) -> i32 {
     crate::registry::EXIT_OK
 }
 
-fn lifecycle(app: &mut App, method: &str, ordinal: u16, id: u64) -> i32 {
-    app.trace("Network", method, ordinal);
+fn lifecycle(app: &mut App, method: &str, id: u64) -> i32 {
     let params = msg(|m| {
         let mut p = m.init_root::<wire::up_interface_params::Builder<'_>>();
         p.reborrow().init_interface_id().set_id(id);
     });
-    go(app, "Network", method, ordinal, &params, super::VOID)
+    go(app, "Network", method, &params, super::VOID)
 }
 
 // ── networking ────────────────────────────────────────────────────────────
@@ -457,7 +475,7 @@ fn networking_cmd(sub: &[String], app: &mut App) -> i32 {
         let mut p = m.init_root::<wire::set_networking_params::Builder<'_>>();
         p.set_enabled(on);
     });
-    go(app, "Network", "setNetworking", 72, &params, super::VOID)
+    go(app, "Network", "setNetworking", &params, super::VOID)
 }
 
 // ── wifi ────────────────────────────────────────────────────────────────
@@ -476,10 +494,10 @@ fn wifi_cmd(sub: &[String], app: &mut App) -> i32 {
                 p.set_radio("wifi");
                 p.set_enabled(on);
             });
-            go(app, "Network", "setRadioEnabled", 74, &params, super::VOID)
+            go(app, "Network", "setRadioEnabled", &params, super::VOID)
         }
         "connect" => wifi_connect(args.get(1).cloned().unwrap_or_default(), args.get(2).cloned(), app),
-        "disconnect" => go(app, "Network", "wifiDisconnect", 8, &empty::<wire::wifi_disconnect_params::Owned>(), super::VOID),
+        "disconnect" => go(app, "Network", "wifiDisconnect", &empty::<wire::wifi_disconnect_params::Owned>(), super::VOID),
         "forget" => wifi_forget(args.get(1).cloned().unwrap_or_default(), app),
         other => {
             super::usage_error_app(app, &format!("unknown wifi verb '{other}' (stats|list|scan|on|off|connect|disconnect|forget)"));
@@ -495,8 +513,8 @@ fn wifi_list(where_tokens: &[String], app: &mut App) -> i32 {
         Ok(pred) => pred,
         Err(code) => return code,
     };
-    app.trace("Network", "listKnownWifiNetworks", 78);
-    let bytes = match app.conn().call(net_id(), 78, &pagination(0, 256)) {
+    app.trace_named("Network", "listKnownWifiNetworks");
+    let bytes = match super::call(app, "Network", "listKnownWifiNetworks", &pagination(0, 256)) {
         Ok(bytes) => bytes,
         Err(e) => return super::emit_error(app, &e),
     };
@@ -542,8 +560,8 @@ fn wifi_scan(where_tokens: &[String], app: &mut App) -> i32 {
         Ok(pred) => pred,
         Err(code) => return code,
     };
-    app.trace("Network", "wifiScan", 6);
-    let bytes = match app.conn().call(net_id(), 6, &pagination(0, 256)) {
+    app.trace_named("Network", "wifiScan");
+    let bytes = match super::call(app, "Network", "wifiScan", &pagination(0, 256)) {
         Ok(bytes) => bytes,
         Err(e) => return super::emit_error(app, &e),
     };
@@ -617,11 +635,11 @@ fn wifi_stats(app: &mut App) -> i32 {
         let mut p = m.init_root::<wire::get_status_params::Builder<'_>>();
         p.reborrow().init_interface_id().set_id(id);
     });
-    go(app, "Network", "getStatus", 1, &params, Handler { json: json_status, human: human_status })
+    go(app, "Network", "getStatus", &params, Handler { json: json_status, human: human_status })
 }
 
 fn first_wifi_interface(app: &mut App) -> Option<u64> {
-    let bytes = app.conn().call(net_id(), 0, &pagination(0, 256)).ok()?;
+    let bytes = super::call(app, "Network", "getInterfaces", &pagination(0, 256)).ok()?;
     let reader = tp::decode_message::<wire::get_interfaces_results::Owned>(&bytes).ok()?;
     for it in reader.get().ok()?.get_interfaces().into_iter().flatten() {
         if it.get_type().map(|t| t.to_str().unwrap_or("")).unwrap_or("") == "wifi" {
@@ -646,7 +664,7 @@ fn wifi_connect(ssid: String, pass: Option<String>, app: &mut App) -> i32 {
         let mut cred = p.reborrow().init_credential();
         cred.set_id(0);
     });
-    go(app, "Network", "wifiConnect", 7, &params, super::VOID)
+    go(app, "Network", "wifiConnect", &params, super::VOID)
 }
 
 fn wifi_forget(ssid: String, app: &mut App) -> i32 {
@@ -658,7 +676,7 @@ fn wifi_forget(ssid: String, app: &mut App) -> i32 {
         let mut p = m.init_root::<wire::forget_wifi_network_params::Builder<'_>>();
         p.set_ssid(&ssid);
     });
-    go(app, "Network", "forgetWifiNetwork", 77, &params, super::VOID)
+    go(app, "Network", "forgetWifiNetwork", &params, super::VOID)
 }
 
 // ── dns ───────────────────────────────────────────────────────────────────
@@ -675,7 +693,7 @@ fn dns_cmd(sub: &[String], app: &mut App) -> i32 {
                 page.set_offset(0);
                 page.set_limit(64);
             });
-            go(app, "Network", "getDnsServers", 31, &params, Handler { json: json_dns_servers, human: human_dns_servers })
+            go(app, "Network", "getDnsServers", &params, Handler { json: json_dns_servers, human: human_dns_servers })
         }
         "set" => {
             let id = first_interface(app);
@@ -698,7 +716,7 @@ fn dns_cmd(sub: &[String], app: &mut App) -> i32 {
                     }
                 }
             });
-            go(app, "Network", "setDnsServers", 32, &params, super::VOID)
+            go(app, "Network", "setDnsServers", &params, super::VOID)
         }
         // The resolver surface (resolve/reverse/bench/cache/config) lives in
         // dns.capnp and is a SIBLING family: `net dns resolve` routes to it
@@ -761,8 +779,8 @@ fn routes_list(where_tokens: &[String], app: &mut App) -> i32 {
         Ok(pred) => pred,
         Err(code) => return code,
     };
-    app.trace("Network", "getRoutes", 79);
-    let bytes = match app.conn().call(net_id(), 79, &pagination(0, 256)) {
+    app.trace_named("Network", "getRoutes");
+    let bytes = match super::call(app, "Network", "getRoutes", &pagination(0, 256)) {
         Ok(bytes) => bytes,
         Err(e) => return super::emit_error(app, &e),
     };
@@ -833,7 +851,7 @@ fn routes_write(rows: &[RouteRow], app: &mut App) -> i32 {
         }
     });
     // Success is only printed after ok: the closure runs on the Ok arm only.
-    go_with(app, "Network", "setRoutes", 80, &params, |app, bytes| {
+    go_with(app, "Network", "setRoutes", &params, |app, bytes| {
         if app.json() {
             let mut out = String::new();
             json_routes_written(rows, bytes, &mut out);
@@ -901,7 +919,7 @@ fn routes_default(sub: &[String], app: &mut App) -> i32 {
 /// The routing table as read from the contract.
 fn read_routes(app: &mut App) -> Vec<RouteRow> {
     let mut out = Vec::new();
-    if let Ok(bytes) = app.conn().call(net_id(), 79, &pagination(0, 512)) {
+    if let Ok(bytes) = super::call(app, "Network", "getRoutes", &pagination(0, 512)) {
         if let Ok(reader) = tp::decode_message::<wire::get_routes_results::Owned>(&bytes) {
             if let Ok(results) = reader.get() {
                 for r in results.get_routes().into_iter().flatten() {
@@ -974,8 +992,8 @@ fn firewall_rules(where_tokens: &[String], app: &mut App) -> i32 {
         Ok(pred) => pred,
         Err(code) => return code,
     };
-    app.trace("Network", "getFirewallRules", 57);
-    let bytes = match app.conn().call(net_id(), 57, &pagination(0, 256)) {
+    app.trace_named("Network", "getFirewallRules");
+    let bytes = match super::call(app, "Network", "getFirewallRules", &pagination(0, 256)) {
         Ok(bytes) => bytes,
         Err(e) => return super::emit_error(app, &e),
     };
@@ -1114,8 +1132,8 @@ fn firewall_rule(sub: &[String], app: &mut App) -> i32 {
 /// `net firewall stats` — the hit counters the contract's `FirewallRule.hitCount`
 /// @13 carries, aggregated client-side (measured, never assumed).
 fn firewall_stats(app: &mut App) -> i32 {
-    app.trace("Network", "getFirewallRules", 57);
-    let bytes = match app.conn().call(net_id(), 57, &pagination(0, 512)) {
+    app.trace_named("Network", "getFirewallRules");
+    let bytes = match super::call(app, "Network", "getFirewallRules", &pagination(0, 512)) {
         Ok(bytes) => bytes,
         Err(e) => return super::emit_error(app, &e),
     };
@@ -1207,7 +1225,7 @@ fn firewall_write(rules: &[RuleSnap], app: &mut App) -> i32 {
         }
     });
     // Success is only printed after ok: the closure runs on the Ok arm only.
-    go_with(app, "Network", "setFirewallRules", 56, &params, |app, bytes| {
+    go_with(app, "Network", "setFirewallRules", &params, |app, bytes| {
         if app.json() {
             let mut out = String::new();
             json_firewall_written(rules, bytes, &mut out);
@@ -1349,7 +1367,7 @@ fn write_rule_snapshot(mut rule: net::firewall_rule::Builder<'_>, snap: &RuleSna
 
 fn read_firewall_rules(app: &mut App) -> Vec<RuleSnap> {
     let mut out = Vec::new();
-    let Ok(bytes) = app.conn().call(net_id(), 57, &pagination(0, 512)) else { return out };
+    let Ok(bytes) = super::call(app, "Network", "getFirewallRules", &pagination(0, 512)) else { return out };
     let Ok(reader) = tp::decode_message::<wire::get_firewall_rules_results::Owned>(&bytes) else { return out };
     let Ok(results) = reader.get() else { return out };
     for r in results.get_rules().into_iter().flatten() {
@@ -1381,7 +1399,7 @@ fn read_firewall_rules(app: &mut App) -> Vec<RuleSnap> {
 fn proxy_cmd(sub: &[String], app: &mut App) -> i32 {
     let verb = sub.first().map(String::as_str).unwrap_or("get");
     match verb {
-        "get" | "" => go(app, "Network", "getProxyConfig", 81, &empty::<wire::get_proxy_config_params::Owned>(), Handler { json: json_proxy, human: human_proxy }),
+        "get" | "" => go(app, "Network", "getProxyConfig", &empty::<wire::get_proxy_config_params::Owned>(), Handler { json: json_proxy, human: human_proxy }),
         "set" => {
             let url = sub.get(1).cloned().unwrap_or_default();
             let params = msg(|m| {
@@ -1390,7 +1408,7 @@ fn proxy_cmd(sub: &[String], app: &mut App) -> i32 {
                 config.set_enabled(true);
                 config.set_url(&url);
             });
-            go(app, "Network", "setProxyConfig", 82, &params, super::VOID)
+            go(app, "Network", "setProxyConfig", &params, super::VOID)
         }
         "off" => {
             let params = msg(|m| {
@@ -1398,7 +1416,7 @@ fn proxy_cmd(sub: &[String], app: &mut App) -> i32 {
                 let mut config = p.reborrow().init_config();
                 config.set_enabled(false);
             });
-            go(app, "Network", "setProxyConfig", 82, &params, super::VOID)
+            go(app, "Network", "setProxyConfig", &params, super::VOID)
         }
         other => {
             super::usage_error_app(app, &format!("unknown proxy verb '{other}' (get|set|off)"));
@@ -1419,7 +1437,7 @@ fn ping_cmd(sub: &[String], app: &mut App) -> i32 {
         let mut target = p.reborrow().init_target();
         set_ip_text(&mut target, &host);
     });
-    go(app, "Network", "ping", 54, &params, Handler { json: json_ping, human: human_ping })
+    go(app, "Network", "ping", &params, Handler { json: json_ping, human: human_ping })
 }
 
 fn traceroute_cmd(sub: &[String], app: &mut App) -> i32 {
@@ -1432,7 +1450,7 @@ fn traceroute_cmd(sub: &[String], app: &mut App) -> i32 {
         let mut target = p.reborrow().init_target();
         set_ip_text(&mut target, &host);
     });
-    go(app, "Network", "traceroute", 55, &params, Handler { json: json_traceroute, human: human_traceroute })
+    go(app, "Network", "traceroute", &params, Handler { json: json_traceroute, human: human_traceroute })
 }
 
 // ── bandwidth / vpn ────────────────────────────────────────────────────────
@@ -1448,12 +1466,12 @@ fn bandwidth_cmd(sub: &[String], app: &mut App) -> i32 {
         let mut window = p.reborrow().init_window();
         window.set_nanoseconds(0);
     });
-    go(app, "Network", "getCounters", 35, &params, Handler { json: json_counters, human: human_counters })
+    go(app, "Network", "getCounters", &params, Handler { json: json_counters, human: human_counters })
 }
 
 fn vpn_cmd(sub: &[String], app: &mut App) -> i32 {
     match sub.first().map(String::as_str).unwrap_or("list") {
-        "list" | "" | "status" => go(app, "Network", "listVpnProfiles", 17, &pagination(0, 64), Handler { json: json_vpn_list, human: human_vpn_list }),
+        "list" | "" | "status" => go(app, "Network", "listVpnProfiles", &pagination(0, 64), Handler { json: json_vpn_list, human: human_vpn_list }),
         other => {
             super::usage_error_app(app, &format!("unknown vpn verb '{other}' (list)"));
             crate::registry::EXIT_USAGE
@@ -1464,33 +1482,53 @@ fn vpn_cmd(sub: &[String], app: &mut App) -> i32 {
 // ── watch: the subscription triplets behind one verb ───────────────────────
 
 /// One stream's two renderers over the SAME event object.
-struct Stream {
-    /// The subscribe ordinal (`subscribeCounters` @37 / `subscribeStatus` @2).
-    subscribe: u16,
-    /// The event's contract-shaped JSON object.
-    json: fn(&[u8], &mut String),
-    /// The event's human line (decoration over the same object).
-    human: fn(&[u8]) -> String,
+///
+/// The stream names the contract's own subscription: `subscribeCounters`
+/// answers a `CounterSubscription` capability, `subscribeStatus` a
+/// `StatusSubscription` one. `pull` and `cancel` are methods OF THAT
+/// CAPABILITY — the contract's own call model, not an envelope of ours.
+enum Stream {
+    /// The counters stream (`subscribeCounters`).
+    Counters {
+        /// The event's contract-shaped JSON object.
+        json: fn(&[u8], &mut String),
+        /// The event's human line (decoration over the same object).
+        human: fn(&[u8]) -> String,
+    },
+    /// The status stream (`subscribeStatus`).
+    Status {
+        /// The event's contract-shaped JSON object.
+        json: fn(&[u8], &mut String),
+        /// The event's human line (decoration over the same object).
+        human: fn(&[u8]) -> String,
+    },
+}
+
+impl Stream {
+    /// The stream's event renderers.
+    fn renderers(&self) -> (fn(&[u8], &mut String), fn(&[u8]) -> String) {
+        match self {
+            Stream::Counters { json, human } => (*json, *human),
+            Stream::Status { json, human } => (*json, *human),
+        }
+    }
 }
 
 fn watch_cmd(sub: &[String], app: &mut App) -> i32 {
     let which = sub.first().map(String::as_str).unwrap_or("bandwidth");
     let stream = match which {
-        "bandwidth" | "counters" | "traffic" => Stream {
-            subscribe: 37,
+        "bandwidth" | "counters" | "traffic" => Stream::Counters {
             json: json_counter_event,
             human: human_counter_event,
         },
-        "status" | "wifi" | "connection" => Stream {
-            subscribe: 2,
+        "status" | "wifi" | "connection" => Stream::Status {
             json: json_status,
             human: human_status_event,
         },
         // `connections`/`ports` compose from socket.capnp, which declares no
         // all-sockets enumeration (doc 04 §4): the honest answer, not a route.
         "connections" | "ports" => return unrouted_socket_view(app),
-        "" => Stream {
-            subscribe: 37,
+        "" => Stream::Counters {
             json: json_counter_event,
             human: human_counter_event,
         },
@@ -1512,50 +1550,29 @@ fn watch_cmd(sub: &[String], app: &mut App) -> i32 {
     let wants = sub.get(1).filter(|a| !a.starts_with("--")).cloned();
     let id = match wants {
         Some(name) => resolve_interface(app, &name).unwrap_or_else(|| first_interface(app)),
-        None => if which == "status" || which == "wifi" || which == "connection" {
-            first_interface(app)
-        } else {
-            first_interface(app)
-        },
+        None => first_interface(app),
     };
-    let params = match stream.subscribe {
-        37 => msg(|m| {
-            let mut p = m.init_root::<wire::subscribe_counters_params::Builder<'_>>();
-            p.reborrow().init_interface_id().set_id(id);
-        }),
-        _ => msg(|m| {
-            let mut p = m.init_root::<wire::subscribe_status_params::Builder<'_>>();
-            p.reborrow().init_interface_id().set_id(id);
-        }),
-    };
-    let first = match app.conn().call(net_id(), stream.subscribe, &params) {
-        Ok(bytes) => bytes,
-        Err(e) => return super::emit_error(app, &e),
-    };
-    let Some((sub_id, _)) = crate::frame::split_sub_id(&first) else {
-        super::usage_error_app(app, "the subscription answer carried no id");
-        return crate::registry::EXIT_CALL_FAILED;
+    // The subscribe is a TYPED call: the contract's results carry the
+    // subscription capability, and a capability does not survive
+    // serialization — so this is the one path that keeps the answer alive.
+    let subscription = match subscribe(app, &stream, id) {
+        Ok(subscription) => subscription,
+        Err(error) => return super::emit_error(app, &error),
     };
     let json_mode = app.json();
     let quiet = app.quiet();
-    // The first event rides the subscribe answer (no extra round trip).
-    let mut delivered = 0u64;
-    if let Some((_, event)) = crate::frame::split_sub_id(&first) {
-        print_event(&stream, json_mode, quiet, event);
-        delivered = 1;
-    }
     let result = watch::drive(
         app.conn(),
-        sub_id,
+        &subscription,
         options,
         None::<fn(&[u8]) -> Option<u64>>,
-        delivered,
+        0,
         |event| {
             print_event(&stream, json_mode, quiet, event);
             Ok::<(), String>(())
         },
     );
-    let _ = app.conn().cancel_subscription(sub_id);
+    let _ = subscription.cancel(app.conn());
     match result {
         Ok(summary) => {
             if !json_mode {
@@ -1567,17 +1584,96 @@ fn watch_cmd(sub: &[String], app: &mut App) -> i32 {
     }
 }
 
+/// Subscribe to one stream: the contract's own `subscribeX`, answered with the
+/// subscription capability.
+fn subscribe(
+    app: &mut App,
+    stream: &Stream,
+    interface_id: u64,
+) -> Result<crate::transport::Subscription, crate::transport::CallError> {
+    use crate::transport::Subscription;
+    match stream {
+        Stream::Counters { .. } => {
+            let (net_id, method) = super::ids("Network", "subscribeCounters").ok_or_else(|| {
+                crate::transport::CallError::Transport(
+                    "the contract has no `subscribeCounters` method in this build".to_string(),
+                )
+            })?;
+            let mut message = capnp::message::Builder::new_default();
+            {
+                let mut p = message.init_root::<wire::subscribe_counters_params::Builder<'_>>();
+                p.reborrow().init_interface_id().set_id(interface_id);
+            }
+            let bytes = tp::encode_message(&message);
+            let reader = tp::decode_message::<wire::subscribe_counters_params::Owned>(&bytes)
+                .map_err(crate::transport::CallError::Transport)?;
+            let params = reader
+                .get()
+                .map_err(|e| crate::transport::CallError::Transport(format!("{e}")))?;
+            let response = app.conn().call_typed::<
+                wire::subscribe_counters_params::Owned,
+                wire::subscribe_counters_results::Owned,
+            >(net_id, method, params)?;
+            let results = response
+                .get()
+                .map_err(|e| crate::transport::CallError::Transport(format!("{e}")))?;
+            let capability = results
+                .get_subscription()
+                .map_err(|e| crate::transport::CallError::Transport(format!("{e}")))?;
+            Ok(Subscription::new(
+                capability.client,
+                "network",
+                "CounterSubscription",
+            ))
+        }
+        Stream::Status { .. } => {
+            let (net_id, method) = super::ids("Network", "subscribeStatus").ok_or_else(|| {
+                crate::transport::CallError::Transport(
+                    "the contract has no `subscribeStatus` method in this build".to_string(),
+                )
+            })?;
+            let mut message = capnp::message::Builder::new_default();
+            {
+                let mut p = message.init_root::<wire::subscribe_status_params::Builder<'_>>();
+                p.reborrow().init_interface_id().set_id(interface_id);
+            }
+            let bytes = tp::encode_message(&message);
+            let reader = tp::decode_message::<wire::subscribe_status_params::Owned>(&bytes)
+                .map_err(crate::transport::CallError::Transport)?;
+            let params = reader
+                .get()
+                .map_err(|e| crate::transport::CallError::Transport(format!("{e}")))?;
+            let response = app.conn().call_typed::<
+                wire::subscribe_status_params::Owned,
+                wire::subscribe_status_results::Owned,
+            >(net_id, method, params)?;
+            let results = response
+                .get()
+                .map_err(|e| crate::transport::CallError::Transport(format!("{e}")))?;
+            let capability = results
+                .get_subscription()
+                .map_err(|e| crate::transport::CallError::Transport(format!("{e}")))?;
+            Ok(Subscription::new(
+                capability.client,
+                "network",
+                "StatusSubscription",
+            ))
+        }
+    }
+}
+
 /// Print one event in the mode the invocation runs in (JSON is one object per
 /// line; the human line is decoration over the same object).
 fn print_event(stream: &Stream, json: bool, quiet: bool, event: &[u8]) {
+    let (json_renderer, human_renderer) = stream.renderers();
     if json {
         let mut out = String::new();
-        (stream.json)(event, &mut out);
+        json_renderer(event, &mut out);
         if !out.is_empty() {
             println!("{out}");
         }
     } else if !quiet {
-        print!("{}", (stream.human)(event));
+        print!("{}", human_renderer(event));
         let _ = std::io::stdout().flush();
     }
 }
@@ -1693,14 +1789,14 @@ fn read_doc(path: &str) -> Result<crate::profile::Doc, String> {
 /// `net export`: capture the CLI-local state from the service and print it as
 /// the state-file TOML (stdout; the user redirects).
 fn export_cmd(app: &mut App) -> i32 {
-    let networking = app.conn().call(net_id(), 73, &empty::<wire::is_networking_enabled_params::Owned>());
-    let radios = app.conn().call(net_id(), 75, &pagination(0, 256));
-    let interfaces = app.conn().call(net_id(), 0, &pagination(0, 512));
+    let networking = super::call(app, "Network", "isNetworkingEnabled", &empty::<wire::is_networking_enabled_params::Owned>());
+    let radios = super::call(app, "Network", "listRadioStates", &pagination(0, 256));
+    let interfaces = super::call(app, "Network", "getInterfaces", &pagination(0, 512));
     let dns_interface = first_interface(app);
-    let dns = app.conn().call(net_id(), 31, &dns_page_params(dns_interface));
-    let proxy = app.conn().call(net_id(), 81, &empty::<wire::get_proxy_config_params::Owned>());
-    let routes = app.conn().call(net_id(), 79, &pagination(0, 512));
-    let known = app.conn().call(net_id(), 78, &pagination(0, 512));
+    let dns = super::call(app, "Network", "getDnsServers", &dns_page_params(dns_interface));
+    let proxy = super::call(app, "Network", "getProxyConfig", &empty::<wire::get_proxy_config_params::Owned>());
+    let routes = super::call(app, "Network", "getRoutes", &pagination(0, 512));
+    let known = super::call(app, "Network", "listKnownWifiNetworks", &pagination(0, 512));
 
     let mut doc = crate::profile::Doc::new();
     if let Ok(bytes) = &networking {
@@ -1941,7 +2037,7 @@ fn apply_doc(doc: &crate::profile::Doc, profile: Option<&str>, app: &mut App) ->
                 let mut cred = p.reborrow().init_credential();
                 cred.set_id(0);
             });
-            match app.conn().call(net_id(), 7, &params) {
+            match super::call(app, "Network", "wifiConnect", &params) {
                 Ok(_) => applied.push("wifi"),
                 Err(e) => return applied_failure(app, &applied, e),
             }
@@ -1965,7 +2061,7 @@ fn apply_doc(doc: &crate::profile::Doc, profile: Option<&str>, app: &mut App) ->
                 set_ip_text(&mut addr, ip);
             }
         });
-        match app.conn().call(net_id(), 32, &params) {
+        match super::call(app, "Network", "setDnsServers", &params) {
             Ok(_) => applied.push("dns"),
             Err(e) => return applied_failure(app, &applied, e),
         }
@@ -1984,7 +2080,7 @@ fn apply_doc(doc: &crate::profile::Doc, profile: Option<&str>, app: &mut App) ->
             config.set_enabled(enabled);
             config.set_url(&url);
         });
-        match app.conn().call(net_id(), 82, &params) {
+        match super::call(app, "Network", "setProxyConfig", &params) {
             Ok(_) => applied.push("proxy"),
             Err(e) => return applied_failure(app, &applied, e),
         }
@@ -2026,7 +2122,7 @@ fn apply_doc(doc: &crate::profile::Doc, profile: Option<&str>, app: &mut App) ->
                 route.reborrow().init_interface_id().set_id(row.interface_id);
             }
         });
-        match app.conn().call(net_id(), 80, &params) {
+        match super::call(app, "Network", "setRoutes", &params) {
             Ok(_) => applied.push("routes"),
             Err(e) => return applied_failure(app, &applied, e),
         }

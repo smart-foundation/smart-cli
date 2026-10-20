@@ -35,7 +35,7 @@ pub mod socket;
 #[cfg(feature = "cmd-discovery")]
 pub mod discovery;
 
-/// The CLI's own name, in the architecture-law sense (no "smart-lib" here).
+/// The CLI's own name, in the architecture-law sense (no "an implementation crate" here).
 pub const SHELL: &str = "net";
 
 // ── The mode one invocation runs in ───────────────────────────────────────
@@ -115,11 +115,34 @@ impl<'a> App<'a> {
         &self.style
     }
     /// The `--verbose` audit line naming one call's schema identity.
-    pub fn trace(&self, interface: &str, method: &str, ordinal: u16) {
+    ///
+    /// The schema stem, the interface, the method and the method id are all
+    /// GENERATED (see [`crate::contract`]) — the audit trail cannot drift
+    /// from the contract.
+    pub fn trace(&self, target: &Target, method: &str) {
         if self.mode.verbose {
             eprintln!(
-                "verbose: {}.capnp:Network.{method} @{ordinal} via {}",
-                if interface == "Network" { "network" } else { interface },
+                "verbose: {}.capnp:{}.{method} @{} via {}",
+                target.interface.stem,
+                target.interface.name,
+                target.method_id,
+                self.spawn.label()
+            );
+        }
+    }
+    /// The audit line for one call named by the contract (the ids come from
+    /// the GENERATED table).
+    pub fn trace_named(&self, interface: &str, method: &str) {
+        if let Some(target) = target(interface, method) {
+            self.trace(&target, method);
+        }
+    }
+    /// The audit line for a call the CLI made through the GENERIC path (a
+    /// schema this build never compiled): the identity is the service's.
+    pub fn trace_generic(&self, domain: &str, interface: &str, method: &str, method_id: u16) {
+        if self.mode.verbose {
+            eprintln!(
+                "verbose: {domain}.capnp:{interface}.{method} @{method_id} via {} (generic path)",
                 self.spawn.label()
             );
         }
@@ -137,8 +160,8 @@ impl<'a> App<'a> {
         }
     }
     /// Raw call access (for commands that build inline helpers).
-    pub fn call(&mut self, interface_id: u64, ordinal: u16, params: &[u8]) -> Result<Vec<u8>, CallError> {
-        self.conn.call(interface_id, ordinal, params)
+    pub fn call(&mut self, interface_id: u64, method_id: u16, params: &[u8]) -> Result<Vec<u8>, CallError> {
+        self.conn.call(interface_id, method_id, params)
     }
     /// Raw subscription access (watch) — the connection, for pull/cancel.
     pub fn conn(&mut self) -> &mut Connection {
@@ -154,14 +177,69 @@ pub struct Handler {
     pub human: fn(&[u8]) -> String,
 }
 
-/// Issue one call with the given params and render its ok result (JSON or
-/// human), or emit the error and return its exit code. This is the single seam
-/// where "success only after ok" is enforced: the renderers run ONLY on Ok.
-pub fn go(app: &mut App, interface: &str, method: &str, ordinal: u16, params: &[u8], handler: Handler) -> i32 {
-    app.trace(interface, method, ordinal);
-    let interface_id = schema_id_for(interface);
-    let result = app.conn.call(interface_id, ordinal, params);
+/// A call target: the contract interface and the method, resolved from the
+/// GENERATED tables.
+///
+/// The interface's **type id** and the method's **id** both come from the
+/// contract: the type id from the generated bindings, the method id from the
+/// ordinal the schema declares. No ordinal is written by hand anywhere in
+/// this crate.
+#[derive(Clone, Copy, Debug)]
+pub struct Target {
+    /// The contract interface the call names.
+    pub interface: contract::InterfaceInfo,
+    /// The method's capnp id.
+    pub method_id: u16,
+}
+
+/// Resolve a command's call target by the names the schema gives them.
+///
+/// `None` means the contract has no such method in this build — an honest
+/// "this build cannot", never a fabricated call.
+pub fn target(interface: &str, method: &str) -> Option<Target> {
+    let info = contract::interface_named(interface)?;
+    let method_id = contract::method_id(info.stem, info.name, method)?;
+    Some(Target {
+        interface: info,
+        method_id,
+    })
+}
+
+/// Issue one call by NAME (the ids come from the GENERATED tables) and render
+/// its ok result (JSON or human), or emit the error and return its exit code.
+/// This is the single seam where "success only after ok" is enforced: the
+/// renderers run ONLY on Ok.
+pub fn go(app: &mut App, interface: &str, method: &str, params: &[u8], handler: Handler) -> i32 {
+    let Some(target) = target(interface, method) else {
+        usage_error_app(
+            app,
+            &format!("the contract has no method `{interface}.{method}` in this build"),
+        );
+        return registry::EXIT_USAGE;
+    };
+    app.trace(&target, method);
+    let result = app
+        .conn
+        .call(target.interface.type_id, target.method_id, params);
     emit_result(app, result, &handler)
+}
+
+/// The interface id and the method id of one contract method (both GENERATED).
+pub fn ids(interface: &str, method: &str) -> Option<(u64, u16)> {
+    let target = target(interface, method)?;
+    Some((target.interface.type_id, target.method_id))
+}
+
+/// Issue one call by NAME, without a renderer (for the composers that need
+/// the bytes they just wrote).
+pub fn call(app: &mut App, interface: &str, method: &str, params: &[u8]) -> Result<Vec<u8>, CallError> {
+    let target = target(interface, method).ok_or_else(|| {
+        CallError::Transport(format!(
+            "the contract has no method `{interface}.{method}` in this build"
+        ))
+    })?;
+    app.conn
+        .call(target.interface.type_id, target.method_id, params)
 }
 
 /// Issue one call and hand the ok payload to a closure renderer (the composers
@@ -172,16 +250,23 @@ pub fn go_with<F>(
     app: &mut App,
     interface: &str,
     method: &str,
-    ordinal: u16,
     params: &[u8],
     render: F,
 ) -> i32
 where
     F: FnOnce(&mut App, &[u8]),
 {
-    app.trace(interface, method, ordinal);
-    let interface_id = schema_id_for(interface);
-    let result = app.conn.call(interface_id, ordinal, params);
+    let Some(target) = target(interface, method) else {
+        usage_error_app(
+            app,
+            &format!("the contract has no method `{interface}.{method}` in this build"),
+        );
+        return registry::EXIT_USAGE;
+    };
+    app.trace(&target, method);
+    let result = app
+        .conn
+        .call(target.interface.type_id, target.method_id, params);
     match result {
         Ok(bytes) => {
             render(app, &bytes);
@@ -208,22 +293,6 @@ pub fn emit_result(app: &mut App, result: Result<Vec<u8>, CallError>, handler: &
         }
         Err(error) => emit_error(app, &error),
     }
-}
-
-/// The schema id a command's interface routes through.
-pub fn schema_id_for(interface: &str) -> u64 {
-    let stem = match interface {
-        "Network" => "network",
-        "Dns" => "dns",
-        "Socket" => "socket",
-        "Bluetooth" => "bluetooth",
-        "Tunnel" => "tunnel",
-        "Web" => "web",
-        "Discovery" => "discovery",
-        "Cli" => "cli",
-        other => other,
-    };
-    contract::schema_id(stem).unwrap_or(0)
 }
 
 /// Emit an error (JSON `error` object or human stderr line) and return the exit
@@ -256,12 +325,29 @@ pub fn emit_error(app: &App, error: &CallError) -> i32 {
             }
             registry::EXIT_CALL_FAILED
         }
+        CallError::Unavailable { what, reason } => {
+            // "This host cannot run it" — the published table's row 3, with
+            // the reason the caller was given.
+            if app.json() {
+                let mut out = String::new();
+                json::write_error(&mut out, smart_cli_schema_types_unavailable(), reason);
+                println!("{out}");
+            } else {
+                eprintln!("unavailable: {what} is unavailable: {reason}");
+            }
+            registry::EXIT_UNAVAILABLE
+        }
     }
 }
 
 /// The contract's `T.ErrorCode::Failed` without importing types in every arm.
 fn smart_cli_schema_types_failed() -> crate::schema::types_capnp::ErrorCode {
     crate::schema::types_capnp::ErrorCode::Failed
+}
+
+/// The contract `T.ErrorCode::Unavailable` without importing types in every arm.
+fn smart_cli_schema_types_unavailable() -> crate::schema::types_capnp::ErrorCode {
+    crate::schema::types_capnp::ErrorCode::Unavailable
 }
 
 // ── Standard result handlers ──────────────────────────────────────────────
@@ -299,14 +385,20 @@ pub fn run(overrides: &ConnectOverrides) -> i32 {
     if matches!(cmd_args.first().map(String::as_str), Some("completions") | Some("install")) {
         let family = cmd_args[0].clone();
         let sub = &cmd_args[1..];
+        // The SERVICE's registry: what the service publishes (the truth about
+        // the host) and what it reports unavailable (the honesty filter).
+        let mut service: Option<registry::ServiceRegistry> = None;
         let availability = remote::resolve(overrides)
             .ok()
-            .and_then(|spawn| Connection::connect(&spawn.target).ok())
-            .map(|mut conn| registry::list_unavailable(&mut conn))
+            .and_then(|spawn| Connection::connect(&spawn.endpoint).ok())
+            .map(|mut conn| {
+                service = registry::fetch(&mut conn);
+                registry::list_unavailable(&mut conn)
+            })
             .unwrap_or(registry::Availability::Unpublished);
         return match family.as_str() {
-            "completions" => completions_command(sub, &flags, &availability),
-            _ => install_command(sub, &flags, &availability),
+            "completions" => completions_command(sub, &flags, &availability, service.as_ref()),
+            _ => install_command(sub, &flags, &availability, service.as_ref()),
         };
     }
 
@@ -318,7 +410,7 @@ pub fn run(overrides: &ConnectOverrides) -> i32 {
         }
     };
 
-    let mut conn = match Connection::connect(&spawn.target) {
+    let mut conn = match Connection::connect(&spawn.endpoint) {
         Ok(conn) => conn,
         Err(error) => {
             // "No service at all" -> unavailable with a reason (Part 5); never
@@ -326,6 +418,7 @@ pub fn run(overrides: &ConnectOverrides) -> i32 {
             let detail = match &error {
                 CallError::Transport(d) => d.clone(),
                 CallError::Service(s) => s.message.clone(),
+                CallError::Unavailable { what, reason } => format!("{what} is unavailable: {reason}"),
             };
             if flags.json {
                 println!(
@@ -412,6 +505,92 @@ pub fn run(overrides: &ConnectOverrides) -> i32 {
     }
 }
 
+/// The **generic path**: a command the SERVICE published and this build never
+/// compiled.
+///
+/// The registry names the method (schema id + interface + method) and the
+/// service publishes the schema's node tree; the CLI walks that tree to
+/// address the call — no compiled binding, no hand-written ordinal, no
+/// per-domain call site. A service that ships a contract this CLI has never
+/// seen therefore works with no CLI change at all.
+///
+/// `None` means the service published no such command: the caller then
+/// refuses honestly (the CLI never invents a route).
+pub fn generic_command(app: &mut App, path: &str, args: &[String]) -> Option<i32> {
+    let service = registry::fetch(app.conn())?;
+    let command = service.command(path)?.clone();
+    let schema = command
+        .metadata
+        .iter()
+        .find(|(key, _)| key == crate::dynamic::SCHEMA_METADATA_KEY)
+        .map(|(_, value)| value.clone())?;
+    let tree = crate::dynamic::SchemaTree::decode(&hex_decode(&schema)?)?;
+    let interface = tree.interface(&command.interface)?.clone();
+    let method = tree
+        .method(&command.interface, &command.method)?
+        .clone();
+    let params = match crate::dynamic::build_params(&tree, &method, &key_value_args(args)) {
+        Ok(params) => params,
+        Err(error) => {
+            usage_error_app(app, &error.message);
+            return Some(registry::EXIT_USAGE);
+        }
+    };
+    app.trace_generic(
+        &command.domain,
+        &command.interface,
+        &command.method,
+        method.id,
+    );
+    match app.conn.call(interface.type_id, method.id, &params) {
+        Ok(bytes) => {
+            let values = crate::dynamic::read_results(&tree, method.results_type_id, &bytes)
+                .unwrap_or_default();
+            if app.json() {
+                let mut out = String::from("{");
+                for (index, (name, value)) in values.iter().enumerate() {
+                    if index > 0 {
+                        out.push(',');
+                    }
+                    json::write_key(&mut out, name);
+                    crate::dynamic::write_json(value, &mut out);
+                }
+                out.push('}');
+                println!("{out}");
+            } else {
+                crate::dynamic::render_fields(&values);
+            }
+            Some(registry::EXIT_OK)
+        }
+        Err(error) => Some(emit_error(app, &error)),
+    }
+}
+
+/// The `key=value` arguments the generic path understands.
+fn key_value_args(args: &[String]) -> Vec<(String, String)> {
+    args.iter()
+        .filter_map(|arg| arg.split_once('='))
+        .map(|(key, value)| (key.to_string(), value.to_string()))
+        .collect()
+}
+
+/// Decode a hex string into bytes (the metadata carries the schema's node
+/// tree as hex, because the contract's metadata is a string map).
+fn hex_decode(text: &str) -> Option<Vec<u8>> {
+    let text = text.trim();
+    if text.len() % 2 != 0 {
+        return None;
+    }
+    let mut out = Vec::with_capacity(text.len() / 2);
+    let bytes = text.as_bytes();
+    for pair in bytes.chunks(2) {
+        let high = (pair[0] as char).to_digit(16)?;
+        let low = (pair[1] as char).to_digit(16)?;
+        out.push((high * 16 + low) as u8);
+    }
+    Some(out)
+}
+
 /// The honest answer for a family whose command feature is not compiled here.
 /// (`dead_code` is expected: with every family on, no call site remains.)
 #[allow(dead_code)]
@@ -427,8 +606,13 @@ fn family_not_compiled(flags: &Flags, family: &str) -> i32 {
 /// to stdout (the user redirects, or uses `net install completions`). With no
 /// shell, the shell-agnostic registry corpus is printed instead; with
 /// `--json`, that corpus is printed as JSON.
-fn completions_command(sub: &[String], flags: &Flags, availability: &registry::Availability) -> i32 {
-    let corpus = completions::corpus(availability);
+fn completions_command(
+    sub: &[String],
+    flags: &Flags,
+    availability: &registry::Availability,
+    service: Option<&registry::ServiceRegistry>,
+) -> i32 {
+    let corpus = completions::corpus(availability, service);
     let shell = sub.first().map(String::as_str).unwrap_or("");
     match shell {
         "" => {
@@ -452,7 +636,11 @@ fn completions_command(sub: &[String], flags: &Flags, availability: &registry::A
                     o.key("flags").sub(|out| {
                         let mut first = true;
                         json::array(out, |out| {
-                            for flag in task_flags.iter().chain(registry::GLOBAL_FLAGS.iter()) {
+                            let global: Vec<String> = registry::GLOBAL_FLAGS
+                    .iter()
+                    .map(|flag| flag.to_string())
+                    .collect();
+                for flag in task_flags.iter().chain(global.iter()) {
                                 json::arr_sep(out, first);
                                 first = false;
                                 json::write_str(out, flag);
@@ -521,7 +709,12 @@ fn print_completion_notes(corpus: &completions::Corpus) {
 /// `net install completions [--shell S] [--path P] [--dry-run]` — write the
 /// generated completer ONLY where the user points. The CLI never writes to a
 /// system path silently; `--dry-run` prints what it would write.
-fn install_command(sub: &[String], flags: &Flags, availability: &registry::Availability) -> i32 {
+fn install_command(
+    sub: &[String],
+    flags: &Flags,
+    availability: &registry::Availability,
+    service: Option<&registry::ServiceRegistry>,
+) -> i32 {
     if sub.first().map(String::as_str) != Some("completions") {
         usage_error(flags, "usage: net install completions [--shell bash|zsh|fish|elvish] [--path P] [--dry-run]");
         return registry::EXIT_USAGE;
@@ -549,7 +742,7 @@ fn install_command(sub: &[String], flags: &Flags, availability: &registry::Avail
         });
     let dry_run = sub.iter().skip(1).any(|a| a == "--dry-run");
 
-    let corpus = completions::corpus(availability);
+    let corpus = completions::corpus(availability, service);
     let text = match completions::render(&shell, &corpus) {
         Ok(text) => text,
         Err(reason) => {
@@ -699,21 +892,54 @@ pub fn help(overrides: &ConnectOverrides, flags: &Flags) -> i32 {
     println!("  (run `net completions` for the machine-readable form, or `net completions <shell>`)");
     println!("  (selectors: --where <field> <op> <value> with ==, !=, >, <, ~= and and/or)");
 
-    // Honesty: fetch availability and list what is hidden, when a service is
-    // reachable. A CLI that cannot reach the service says so and does not lie.
+    // Honesty: fetch the SERVICE's registry and list what is hidden, when a
+    // service is reachable. A CLI that cannot reach the service says so and
+    // does not lie.
     if let Ok(spawn) = remote::resolve(overrides) {
-        if let Ok(mut conn) = Connection::connect(&spawn.target) {
+        if let Ok(mut conn) = Connection::connect(&spawn.endpoint) {
             let mut app = App {
                 conn: &mut conn,
                 mode: *flags,
                 style: Style::plain(),
                 spawn,
             };
+            let service = registry::fetch(app.conn());
             let availability = registry::list_unavailable(app.conn());
+            print_published(service.as_ref());
             print_hidden(&availability);
         }
     }
     registry::EXIT_OK
+}
+
+/// Print the commands the SERVICE published that this build does not
+/// implement — they run through the generic path, and the help says so.
+///
+/// When the service publishes no registry at all, the help says that the list
+/// above is the CLI's own grammar and that availability is UNVERIFIED.
+fn print_published(service: Option<&registry::ServiceRegistry>) {
+    println!();
+    match service {
+        Some(service) => {
+            let extra: Vec<&registry::Command> = service
+                .commands
+                .iter()
+                .filter(|command| !registry_task_lines().iter().any(|line| line == &command.path))
+                .collect();
+            if extra.is_empty() {
+                println!("published by the service: this build implements them all.");
+                return;
+            }
+            println!("published by the service (this build runs them through the generic path):");
+            for command in extra {
+                println!("  {} — {}", command.path, command.summary);
+            }
+        }
+        None => println!(
+            "the service publishes no registry: the list above is this build's own grammar \
+             and its availability is UNVERIFIED"
+        ),
+    }
 }
 
 /// The registry's task lines as help prints them (one source of truth with

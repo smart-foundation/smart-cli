@@ -26,7 +26,7 @@ pub fn run(sub: &[String], app: &mut App) -> i32 {
         "create" => {
             let kind = rest.first().cloned().unwrap_or_else(|| "stream".to_string());
             let params = msg(|m| { m.init_root::<wire::create_params::Builder<'_>>().set_kind(&kind); });
-            go(app, "Socket", "create", 0, &params, Handler { json: socket_handle, human: socket_handle_human })
+            go(app, "SocketService", "create", &params, Handler { json: socket_handle, human: socket_handle_human })
         }
         "close" => {
             let Some(id) = rest.first().and_then(|s| s.parse::<u64>().ok()) else {
@@ -34,7 +34,7 @@ pub fn run(sub: &[String], app: &mut App) -> i32 {
                 return crate::registry::EXIT_USAGE;
             };
             let params = msg(|m| { m.init_root::<wire::close_params::Builder<'_>>().reborrow().init_handle().init_id().set_id(id); });
-            go(app, "Socket", "close", 17, &params, super::VOID)
+            go(app, "SocketService", "close", &params, super::VOID)
         }
         "name" => {
             let Some(id) = rest.first().and_then(|s| s.parse::<u64>().ok()) else {
@@ -42,7 +42,7 @@ pub fn run(sub: &[String], app: &mut App) -> i32 {
                 return crate::registry::EXIT_USAGE;
             };
             let params = msg(|m| { m.init_root::<wire::get_socket_name_params::Builder<'_>>().reborrow().init_handle().init_id().set_id(id); });
-            go(app, "Socket", "getSocketName", 19, &params, Handler { json: socket_name, human: socket_name_human })
+            go(app, "SocketService", "getSocketName", &params, Handler { json: socket_name, human: socket_name_human })
         }
         "info" => {
             let Some(id) = rest.first().and_then(|s| s.parse::<u64>().ok()) else {
@@ -50,7 +50,7 @@ pub fn run(sub: &[String], app: &mut App) -> i32 {
                 return crate::registry::EXIT_USAGE;
             };
             let params = msg(|m| { m.init_root::<wire::get_info_params::Builder<'_>>().reborrow().init_handle().init_id().set_id(id); });
-            go(app, "Socket", "getInfo", 11, &params, Handler { json: socket_info, human: socket_info_human })
+            go(app, "SocketService", "getInfo", &params, Handler { json: socket_info, human: socket_info_human })
         }
         "list" | "where" => {
             super::usage_error_app(app, "socket list/where needs a per-socket enumeration the contract does not carry (socket-batch gap, doc 04 §4); use socket info <id>");

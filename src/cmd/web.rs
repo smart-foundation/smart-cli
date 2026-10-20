@@ -42,7 +42,7 @@ pub fn run(sub: &[String], app: &mut App) -> i32 {
                 req.set_method(method);
                 req.set_url(&url);
             });
-            go(app, "Web", "fetch", 0, &params, Handler { json: web_fetch, human: web_fetch_human })
+            go(app, "WebService", "fetch", &params, Handler { json: web_fetch, human: web_fetch_human })
         }
         "resolve" => {
             let Some(url) = rest.first().cloned() else {
@@ -55,7 +55,7 @@ pub fn run(sub: &[String], app: &mut App) -> i32 {
                 p.set_url(&url);
                 p.set_base_url(&base);
             });
-            go(app, "Web", "resolveUrl", 3, &params, Handler { json: web_resolve, human: web_resolve_human })
+            go(app, "WebService", "resolveUrl", &params, Handler { json: web_resolve, human: web_resolve_human })
         }
         "download" | "ws" => {
             super::usage_error_app(app, "web download/ws are streaming capabilities; named, not half-routed this wave");

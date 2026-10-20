@@ -38,7 +38,7 @@ pub const SHELLS: &[&str] = &["bash", "zsh", "fish", "elvish"];
 pub struct Corpus {
     /// `(task_word, verbs, flags)` for every task this build runs and the
     /// service does not report unavailable.
-    pub tasks: Vec<(String, Vec<&'static str>, Vec<&'static str>)>,
+    pub tasks: Vec<(String, Vec<String>, Vec<String>)>,
     /// Task words withheld because the service reports them unavailable.
     pub withheld: Vec<String>,
     /// Whether the service published a registry at all (an honest note when
@@ -46,9 +46,16 @@ pub struct Corpus {
     pub availability_verified: bool,
 }
 
-/// Build the completion corpus from the registry table and the service's
-/// availability answer. `connect` is only used when the caller has one.
-pub fn corpus(availability: &Availability) -> Corpus {
+/// Build the completion corpus from the registry table, the service's
+/// availability answer, and the service's own published registry.
+///
+/// The service's registry is the source of TRUTH about what the service
+/// offers; the CLI's table is the source of truth about what THIS BUILD
+/// implements. The corpus is the union: the CLI's grammar (minus what the
+/// service reports unavailable) plus the commands the service publishes that
+/// this build does not implement — those run through the GENERIC path, so
+/// they are completable.
+pub fn corpus(availability: &Availability, service: Option<&registry::ServiceRegistry>) -> Corpus {
     let mut tasks = Vec::new();
     let mut withheld = Vec::new();
     for spec in registry::TASKS {
@@ -70,7 +77,31 @@ pub fn corpus(availability: &Availability) -> Corpus {
                 withheld.extend(hidden_verbs);
                 continue;
             }
-            tasks.push((task.to_string(), spec.verbs.to_vec(), spec.flags.to_vec()));
+            tasks.push((
+                task.to_string(),
+                spec.verbs.iter().map(|v| v.to_string()).collect(),
+                spec.flags.iter().map(|f| f.to_string()).collect(),
+            ));
+        }
+    }
+    // The service's published commands this build does not implement: they
+    // are runnable through the generic path, so they belong in the corpus.
+    if let Some(service) = service {
+        for command in &service.commands {
+            // A command the service reports unavailable is not completed.
+            if registry::is_hidden(availability, &command.path) {
+                continue;
+            }
+            let Some((task, verb)) = command.path.split_once(' ') else {
+                continue;
+            };
+            // The task word is the LAST word of the path's family prefix (the
+            // service's paths name the family too: "net wifi scan").
+            let task = task.rsplit(' ').next().unwrap_or(task);
+            if tasks.iter().any(|(name, _, _)| name == task) {
+                continue;
+            }
+            tasks.push((task.to_string(), vec![verb.to_string()], Vec::new()));
         }
     }
     Corpus {
@@ -125,7 +156,7 @@ fn flag_list(corpus: &Corpus) -> String {
 
 /// The per-task VERB table a shell's completer consults, as `task:v1 v2 …`
 /// entries (the two-level shape the registry expresses).
-fn verb_table(corpus: &Corpus) -> Vec<(String, Vec<&'static str>)> {
+fn verb_table(corpus: &Corpus) -> Vec<(String, Vec<String>)> {
     corpus
         .tasks
         .iter()
@@ -215,7 +246,11 @@ fn fish(corpus: &Corpus) -> String {
     ));
     for (task, verbs, task_flags) in &corpus.tasks {
         out.push_str(&format!("complete -c net -f -n '__fish_use_subcommand' -a '{task}'\n"));
-        let words: Vec<&str> = verbs.iter().filter(|v| !v.starts_with("--")).copied().collect();
+        let words: Vec<&str> = verbs
+            .iter()
+            .filter(|v| !v.starts_with("--"))
+            .map(|v| v.as_str())
+            .collect();
         if !words.is_empty() {
             out.push_str(&format!(
                 "complete -c net -f -n '__fish_seen_subcommand_from {task}' -a '{}'\n",
@@ -249,7 +284,11 @@ fn elvish(corpus: &Corpus) -> String {
     let flags = flag_list(corpus);
     let mut cases = String::new();
     for (task, verbs) in verb_table(corpus) {
-        let words: Vec<&str> = verbs.iter().filter(|v| !v.starts_with("--")).copied().collect();
+        let words: Vec<&str> = verbs
+            .iter()
+            .filter(|v| !v.starts_with("--"))
+            .map(|v| v.as_str())
+            .collect();
         if words.is_empty() {
             continue;
         }
@@ -290,7 +329,7 @@ mod tests {
     use super::*;
 
     fn corpus() -> Corpus {
-        super::corpus(&Availability::Unpublished)
+        super::corpus(&Availability::Unpublished, None)
     }
 
     #[test]
@@ -343,11 +382,14 @@ mod tests {
     #[test]
     #[cfg(feature = "cmd-net")]
     fn unavailable_commands_are_not_completed() {
-        let c = super::corpus(&Availability::Published(vec![registry::Unavailable {
-            path: "wifi scan".to_string(),
-            reason_class: "serviceUnavailable".to_string(),
-            reason: "no radio".to_string(),
-        }]));
+        let c = super::corpus(
+            &Availability::Published(vec![registry::Unavailable {
+                path: "wifi scan".to_string(),
+                reason_class: "serviceUnavailable".to_string(),
+                reason: "no radio".to_string(),
+            }]),
+            None,
+        );
         // The exact hidden PATH is named, and the task is not completed.
         assert!(c.withheld.contains(&"wifi scan".to_string()), "{:?}", c.withheld);
         assert!(!c.tasks.iter().any(|(task, _, _)| task == "wifi"));
@@ -357,9 +399,11 @@ mod tests {
 
     #[test]
     fn an_unpublished_registry_is_stated_not_assumed() {
-        let c = super::corpus(&Availability::Unpublished);
+        let c = super::corpus(&Availability::Unpublished, None);
         assert!(!c.availability_verified);
-        let c = super::corpus(&Availability::Published(Vec::new()));
+        let c = super::corpus(&Availability::Published(Vec::new()),
+            None,
+        );
         assert!(c.availability_verified);
     }
 }

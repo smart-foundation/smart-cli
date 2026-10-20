@@ -15,7 +15,20 @@
 
 use std::process::ExitCode;
 
-// The one test double (speaks the frame protocol) and the shared scenario.
+// The FIXTURE schema's bindings (the same module the test support uses): a
+// schema the CLI library never compiles.
+mod support {
+    #[allow(dead_code, unused_imports, clippy::all)]
+    pub mod fixture {
+        #[allow(dead_code, unused_imports, clippy::all)]
+        pub mod fixture_capnp {
+            include!(concat!(env!("OUT_DIR"), "/fixture_capnp.rs"));
+        }
+    }
+}
+
+// The one test double (speaks the contract's own call model) and the shared
+// scenario.
 include!("../tests/support/mock.rs");
 include!("../tests/support/agent_scenario.rs");
 

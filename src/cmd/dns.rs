@@ -35,29 +35,29 @@ pub fn run(sub: &[String], app: &mut App) -> i32 {
                 let mut req = r.reborrow().init_request();
                 req.reborrow().set_name(&host);
             });
-            go(app, "Dns", "resolve", 0, &params, Handler { json: dns_resolve, human: dns_resolve_human })
+            go(app, "DnsService", "resolve", &params, Handler { json: dns_resolve, human: dns_resolve_human })
         }
         "reverse" => {
             let Some(ip) = rest.first().cloned() else {
                 super::usage_error_app(app, "usage: dns reverse <ip>");
                 return crate::registry::EXIT_USAGE;
             };
-            go(app, "Dns", "reverseResolve", 2, &reverse_params(&ip), Handler { json: dns_reverse, human: dns_reverse_human })
+            go(app, "DnsService", "reverseResolve", &reverse_params(&ip), Handler { json: dns_reverse, human: dns_reverse_human })
         }
         "bench" => {
             // A benchmark is a workflow over resolveBatch + client timing (doc
             // 04 §3); the CLI reports the batch result honestly.
-            go(app, "Dns", "resolveBatch", 33, &dns_empty_batch(), Handler { json: dns_batch, human: |_| String::from("bench: see --json for the batch records\n") })
+            go(app, "DnsService", "resolveBatch", &dns_empty_batch(), Handler { json: dns_batch, human: |_| String::from("bench: see --json for the batch records\n") })
         }
         "flush" => {
             let name = rest.first().cloned().unwrap_or_default();
             let params = msg(|m| { m.init_root::<wire::flush_cache_params::Builder<'_>>().set_name(&name); });
-            go(app, "Dns", "flushCache", 3, &params, super::VOID)
+            go(app, "DnsService", "flushCache", &params, super::VOID)
         }
         "cache" | "stats" => {
-            go(app, "Dns", "getCacheStats", 20, &msg(|m| { m.init_root::<wire::get_cache_stats_params::Builder<'_>>(); }), Handler { json: dns_cache_stats, human: dns_cache_stats_human })
+            go(app, "DnsService", "getCacheStats", &msg(|m| { m.init_root::<wire::get_cache_stats_params::Builder<'_>>(); }), Handler { json: dns_cache_stats, human: dns_cache_stats_human })
         }
-        "config" => go(app, "Dns", "getConfig", 5, &msg(|m| { m.init_root::<wire::get_config_params::Builder<'_>>(); }), Handler { json: dns_config, human: dns_config_human }),
+        "config" => go(app, "DnsService", "getConfig", &msg(|m| { m.init_root::<wire::get_config_params::Builder<'_>>(); }), Handler { json: dns_config, human: dns_config_human }),
         other => {
             super::usage_error_app(app, &format!("unknown dns task '{other}' (resolve|reverse|bench|flush|cache|config)"));
             crate::registry::EXIT_USAGE

@@ -14,25 +14,69 @@ named rather than buried.
 ```
 $ cargo tree
 smart-cli v0.1.0 (/home/lufuno/smart/smart-cli-ng)
-└── capnp v0.27.2
+├── capnp v0.27.2
+├── capnp-rpc v0.27.1
+│   ├── capnp v0.27.2
+│   ├── capnp-futures v0.27.0
+│   │   ├── capnp v0.27.2
+│   │   ├── futures-channel v0.3.34
+│   │   │   ├── futures-core v0.3.34
+│   │   │   └── futures-sink v0.3.34
+│   │   └── futures-util v0.3.34
+│   │       ├── futures-channel v0.3.34 (*)
+│   │       ├── futures-core v0.3.34
+│   │       ├── futures-io v0.3.34
+│   │       ├── futures-macro v0.3.34 (proc-macro)
+│   │       │   ├── proc-macro2 v1.0.107
+│   │       │   │   └── unicode-ident v1.0.27
+│   │       │   ├── quote v1.0.47
+│   │       │   │   └── proc-macro2 v1.0.107 (*)
+│   │       │   └── syn v3.0.9
+│   │       ├── futures-sink v0.3.34
+│   │       ├── futures-task v0.3.34
+│   │       ├── memchr v2.8.3
+│   │       └── pin-project-lite v0.2.16
+│   │   └── futures-sink v0.3.34
+│   └── futures v0.3.34
 [build-dependencies]
 └── capnpc v0.27.0
     └── capnp v0.27.2
 
 $ grep -E '^name = ' Cargo.lock
 name = "capnp"
+name = "capnp-futures"
+name = "capnp-rpc"
 name = "capnpc"
 name = "embedded-io"
+name = "futures"
+name = "futures-channel"
+name = "futures-core"
+name = "futures-executor"
+name = "futures-io"
+name = "futures-macro"
+name = "futures-sink"
+name = "futures-task"
+name = "futures-util"
+name = "memchr"
+name = "pin-project-lite"
+name = "proc-macro2"
+name = "quote"
+name = "slab"
 name = "smart-cli"
+name = "syn"
+name = "unicode-ident"
 
-$ cargo tree --edges normal,build -e no-dev | grep -i smart-lib
-(empty: no smart-lib in the dependency set)
+$ cargo tree --edges normal,build | grep -i smart-lib
+(empty: no implementation crate in the dependency set)
 ```
 
-The only `smart-lib` strings in the tree are prose (comments + the crate
-description) that state the law. The CI grep target is the dependency set —
-`cargo tree` and `Cargo.lock` — and it is empty. There is no path dep, no
-build-dep, and no patch.
+The dependency set is INFRASTRUCTURE only: `capnp` (the contract's runtime),
+`capnp-rpc` (the contract's own CALL MODEL — `rpc.capnp`), the `futures`
+executor `capnp-rpc` already pulls in, and `capnpc` (the build-time codegen).
+There is no path dep, no re-export, and no patch to any implementation crate.
+The CLI's own source names no implementation either: `tests/bootstrap.rs`
+greps `src/` for `smart-lib` / `smart-service` and for a `/tmp/smart` socket
+literal, and asserts both are absent.
 
 ### 1b. Charter law #1 — the core is `no_std` + `alloc`, `std` is opt-in
 
@@ -48,6 +92,57 @@ the socket transports + the pull loop are the `std`-gated widening. The
 `watch::drive` loop and `transport` are behind `feature = "std"`, which every
 `cmd-*` family implies — so the shipped binary has them and the core alone does
 not need them.
+
+## 1c. The spine — the CLI's surface GENERATED from the contract (2026-10-20)
+
+The second vocabulary is gone: `src/frame.rs` is DELETED and the envelope on
+the wire is capnp RPC's own (`rpc.capnp`), with the contract's own
+params/results structs as the payload.
+
+| deliverable | how it is proven | command |
+|---|---|---|
+| the frame codec is gone | the file does not exist; the CLI speaks capnp RPC | `ls src/frame.rs` → *No such file* |
+| the call model is capnp RPC | the session pumps a blocking socket into the RPC runtime and calls the peer's bootstrap capability | `src/rpc.rs` (`Session::connect`, `Session::call`) |
+| the mock is a contract-only server | it serves the GENERATED `Server` traits over the same wire | `tests/support/mock.rs` (`InterfaceRouter`, `network_capnp::network::Server`) |
+| the dispatcher resolves by NAME | the method ids come from the GENERATED table, never from the source | `src/contract.rs` (`methods_of`, `method_id`), `src/cmd/mod.rs` (`target`) |
+| the registry drives the surface | the service's `listCommands`/`listUnavailable` feed the help, the completions and the unavailable list | `src/registry.rs` (`fetch`, `list_unavailable`), `src/cmd/mod.rs` (`print_published`) |
+| the generic path | the CLI calls a schema it never compiled, addressing it from the contract's own node tree | `tests/generic_path.rs` (7 tests) |
+| the bootstrap | `--endpoint` → `$SMART_ENDPOINT` → the config file → the platform runtime dir; no path literal, no implementation named | `tests/bootstrap.rs` (7 tests) |
+| the presenter | the cell/style split, the column measure, the middle cut, the box tables and the `◉/○` vocabulary | `src/present.rs` (unit tests) |
+
+```
+$ ls src/frame.rs
+ls: cannot access 'src/frame.rs': No such file or directory
+
+$ grep -rn "frame::" src/ tests/ examples/
+(no output: the second vocabulary is gone)
+
+$ cargo test -j 6 --test generic_path
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+
+$ cargo test -j 6 --test bootstrap
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+```
+
+### The generic path, in one paragraph
+
+`tests/fixtures/fixture.capnp` is a schema OUTSIDE the canonical tree. The
+CLI's library never compiles it (its build puts the fixture's bindings in the
+TEST support only), so the CLI has no typed route to it — the only way in is
+the generic path: the service publishes the schema's node tree (the contract's
+own `CodeGeneratorRequest`) in the registry's metadata, and the CLI walks that
+tree to learn the interface's type id, the method's id and the params/results
+shapes, then builds the params, calls, and reads the answer with the
+contract's own field names. A service that ships a contract this CLI has never
+seen therefore works with NO CLI change.
+
+**A schema question for the founder**: the contract's `CommandRegistration`
+names the method (`schemaId` + `interfaceName` + `methodName`) but NOT its
+ordinal, and the contract has no place to publish a schema's node tree. A
+client that has not compiled the schema cannot address the method without
+one. This implementation uses the registry's open `metadata` string map
+(`capnpSchema` → the hex-encoded node tree) and reports the gap rather than
+hiding it.
 
 ## 2. Feature-isolation proof (L2) — generated-schema bytes per `cmd-*` set
 

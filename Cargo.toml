@@ -2,11 +2,11 @@
 #
 # The architecture law (the founder's correction), made mechanical here:
 #
-#   The CLI does not know smart-lib. Nothing knows smart-lib. Every consumer
+#   The CLI does not know an implementation crate. Nothing knows an implementation crate. Every consumer
 #   speaks capnp over the contract's transports, generating its OWN bindings
 #   from the contract at build time. This crate's only dependency is the
 #   CONTRACT (capnp runtime + the bindings build.rs generates from
-#   ../smart-protocol-official/schema). There is no path dep on smart-lib, no
+#   ../smart-protocol-official/schema). There is no path dep on an implementation crate, no
 #   re-export of it, and no link to it — proven by the Cargo.lock and a CI grep
 #   (see knowledge/17-cli-proofs.md).
 #
@@ -23,7 +23,7 @@
 name = "smart-cli"
 version = "0.1.0"
 edition = "2021"
-description = "The network-domain CLI: a thin capnp client over the smart-protocol contract (no smart-lib, no daemon coupling)."
+description = "The network-domain CLI: a thin capnp client over the smart-protocol contract (no an implementation crate, no daemon coupling)."
 license = "MIT OR Apache-2.0"
 publish = false
 
@@ -57,7 +57,12 @@ default = ["cmd-net"]
 # The widening feature: capnp std support + the host-socket transports +
 # std I/O for main. The library core stays no_std + alloc (charter law #1);
 # `std` is the seam the CLI's real use hangs on.
-std = ["capnp/std", "capnp/alloc"]
+#
+# `capnp-rpc` is the contract's own CALL MODEL (rpc.capnp) — the runtime the
+# generated clients and servers speak. It needs `std`, so it is part of this
+# widening; `futures` is its executor (capnp-rpc already depends on it, so
+# naming it directly adds no crate to the graph).
+std = ["capnp/std", "capnp/alloc", "capnp-rpc", "futures"]
 
 # ─── schema bindings (one per family; drives build.rs codegen) ───
 # A schema-* feature compiles `<stem>.capnp` (+ foundation + transitive
@@ -84,14 +89,20 @@ cmd-socket = ["schema-socket", "std"]
 [dependencies]
 # The runtime half of the capnp triad (capnp 0.27.x — the canonical contract's
 # line). `default-features = false` + `alloc` keeps capnp itself no_std + alloc
-# (law #1); `std` above widens it. THE ONLY dependency of this crate.
+# (law #1); `std` above widens it.
 capnp = { version = "0.27.2", default-features = false, features = ["alloc"] }
+# The contract's own call model: capnp RPC (rpc.capnp). The envelope on the
+# wire is ITS envelope; the payload is the contract's own params/results.
+capnp-rpc = { version = "0.27.0", optional = true }
+# The executor capnp-rpc's futures are driven on (already in the graph through
+# capnp-rpc; named here because the client drives it directly).
+futures = { version = "0.3", features = ["executor"], optional = true }
 
 [build-dependencies]
 # The codegen half of the triad (capnpc 0.27.0 — the pure-Rust schema compiler
 # that drives the system `capnp` binary, 1.4.0 on this box).
 capnpc = "0.27.0"
 
-# NOTE (the architecture law): there is no smart-lib anywhere below — not a
+# NOTE (the architecture law): there is no an implementation crate anywhere below — not a
 # dependency, not a build-dependency, not a patch. `cargo tree` in this tree
-# names capnp/capnpc/smart-cli only; the Cargo.lock has no smart-lib entry.
+# names capnp/capnpc/smart-cli only; the Cargo.lock has no an implementation crate entry.

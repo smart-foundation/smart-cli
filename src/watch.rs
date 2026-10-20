@@ -10,11 +10,9 @@
 
 use alloc::format;
 #[cfg_attr(not(feature = "std"), allow(unused_imports))]
-use alloc::string::{String, ToString};
+use alloc::string::String;
 #[cfg(feature = "std")]
-use crate::frame;
-#[cfg(feature = "std")]
-use crate::transport::{CallError, Connection};
+use crate::transport::{CallError, Connection, Subscription};
 
 /// The options a `watch`/`--live` invocation carries.
 #[derive(Clone, Copy, Debug)]
@@ -57,19 +55,21 @@ pub fn at_bound(delivered: u64, options: Options) -> bool {
     options.count != 0 && delivered >= options.count && !options.follow
 }
 
-/// Drive `sub_id` under `options`, handing every event bytes to `on_event`
-/// (which JSON-lines or renders them), and return the terminal summary.
+/// Drive `subscription` under `options`, handing every event bytes to
+/// `on_event` (which JSON-lines or renders them), and return the terminal
+/// summary.
 ///
-/// `subscribe` must have already minted `sub_id`; `pre_delivered` is the number
-/// of events already handed to the caller (the subscribe answer carries the
-/// first one), so `--count` bounds the TOTAL events the user sees. When `seq_of`
-/// is `Some`, the emitter reports a monotonic sequence and a gap between
-/// consecutive events is counted as dropped — the drop counter is surfaced,
-/// never silent. An empty pull ("nothing yet") increments `idle`.
+/// The subscription is the CONTRACT's own capability: `pull` is a method of
+/// it, not an envelope of this client's own. `pre_delivered` is the number of
+/// events already handed to the caller, so `--count` bounds the TOTAL events
+/// the user sees. When `seq_of` is `Some`, the emitter reports a monotonic
+/// sequence and a gap between consecutive events is counted as dropped — the
+/// drop counter is surfaced, never silent. An empty pull ("nothing yet")
+/// increments `idle`.
 #[cfg(feature = "std")]
 pub fn drive<E, F, S>(
     conn: &mut Connection,
-    sub_id: u64,
+    subscription: &Subscription,
     options: Options,
     seq_of: Option<S>,
     pre_delivered: u64,
@@ -90,7 +90,7 @@ where
         if at_bound(delivered, options) {
             break;
         }
-        let payload = conn.pull_subscription(sub_id, options.pull_limit)?;
+        let payload = subscription.pull(conn)?;
         if payload.is_empty() {
             // "nothing yet" — a real answer. Wait the interval and re-pull;
             // this is a bounded pull loop, never a busy poll.
@@ -98,8 +98,8 @@ where
             crate::watch::sleep_ms(options.interval_ms.min(2));
             continue;
         }
-        let (_sub, event) = frame::split_sub_id(&payload)
-            .ok_or_else(|| CallError::Transport("subscription payload has no id prefix".to_string()))?;
+        // The pull's answer IS the event: the contract's own results struct.
+        let event = payload.as_slice();
         // Drop detection: a reported monotonic sequence with a gap means the
         // service collapsed events between pulls.
         if let Some(seq_of) = &seq_of {

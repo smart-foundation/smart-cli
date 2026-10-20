@@ -2,12 +2,12 @@
 //! charter law #2 (you pay only for what you enable) and the only reason a
 //! command's surface can be generated FROM the contract.
 //!
-//! It is a direct PORT of smart-lib-ng's `build.rs` approach (the
+//! It is a direct PORT of the sibling implementation's `build.rs` approach (the
 //! alloc-import post-processing and the transitive-import schema set), but
 //! this crate stands entirely on its own: it reads the canonical schema dir
 //! (read-only), compiles exactly the union of foundation + the enabled
 //! `schema-*` features' schemas + their transitive imports, and generates its
-//! OWN bindings into `OUT_DIR`. There is no dependency on smart-lib in any
+//! OWN bindings into `OUT_DIR`. There is no dependency on an implementation crate in any
 //! form (the architecture law).
 //!
 //! What it emits (all into `OUT_DIR`, regenerated every build):
@@ -64,6 +64,11 @@ fn main() {
     post_process_dir(&out_dir);
     write_schema_modules(&out_dir, &files, &binary_version);
     write_contract(&out_dir, &schema_dir, &files, &binary_version);
+    // The FIXTURE schema: a schema the CLI library never compiles. Its
+    // bindings go to the test support only, and its node tree (the contract's
+    // own `CodeGeneratorRequest`) is what the service publishes so the CLI can
+    // address it generically.
+    compile_fixture(&binary, &manifest_dir, &out_dir);
 
     println!(
         "cargo::warning=smart-cli: compiled {} schema file(s) for [{}]",
@@ -76,7 +81,7 @@ fn env(key: &str) -> String {
     std::env::var(key).unwrap_or_else(|e| panic!("build.rs: {key} not set: {e}"))
 }
 
-/// Resolve the schema directory (candidate order mirrors smart-lib's).
+/// Resolve the schema directory (candidate order mirrors the sibling implementation's).
 fn schema_dir(manifest_dir: &Path) -> PathBuf {
     let candidates = match std::env::var_os("SMART_SCHEMA_DIR") {
         Some(dir) => vec![PathBuf::from(dir)],
@@ -185,6 +190,59 @@ fn compile(binary: &str, schema_dir: &Path, out_dir: &Path, files: &[String], bi
     });
 }
 
+/// Compile the FIXTURE schema (the one the CLI library never compiles) for the
+/// test support, and write its node tree.
+///
+/// * `OUT_DIR/fixture_capnp.rs` — the generated bindings, addressed as
+///   `crate::support::fixture::…` (the test support's own module path), so the
+///   CLI LIBRARY has no binding for this schema at all.
+/// * `OUT_DIR/fixture_schema.bin` — the schema's node tree, the bytes
+///   `capnp compile -o-` produces: the contract's own `CodeGeneratorRequest`.
+///   The service publishes them; the CLI walks them to address the call.
+fn compile_fixture(binary: &str, manifest_dir: &Path, out_dir: &Path) {
+    let fixture_dir = manifest_dir.join("tests/fixtures");
+    let fixture = fixture_dir.join("fixture.capnp");
+    if !fixture.is_file() {
+        return;
+    }
+    println!("cargo::rerun-if-changed={}", fixture.display());
+
+    let mut command = capnpc::CompilerCommand::new();
+    command
+        .capnp_executable(binary)
+        .src_prefix(&fixture_dir)
+        .import_path(&fixture_dir)
+        .default_parent_module(vec!["support".to_string(), "fixture".to_string()])
+        .output_path(out_dir);
+    command.file(&fixture);
+    command.run().unwrap_or_else(|e| {
+        panic!("build.rs: capnp compile of the fixture schema failed:\n{e:?}")
+    });
+    // The generated file is named after the schema: `fixture_capnp.rs`.
+    let generated = out_dir.join("fixture_capnp.rs");
+    if !generated.is_file() {
+        panic!("build.rs: the fixture schema produced no bindings");
+    }
+
+    // The node tree: `capnp compile -o-` writes the code generator request.
+    let output = std::process::Command::new(binary)
+        .arg("compile")
+        .arg("-o-")
+        .arg("--src-prefix")
+        .arg(&fixture_dir)
+        .arg(&fixture)
+        .output()
+        .unwrap_or_else(|e| panic!("build.rs: cannot run `{binary} compile -o-`: {e}"));
+    if !output.status.success() {
+        panic!(
+            "build.rs: `{binary} compile -o-` failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    std::fs::write(out_dir.join("fixture_schema.bin"), &output.stdout)
+        .unwrap_or_else(|e| panic!("build.rs: cannot write the fixture node tree: {e}"));
+}
+
 /// Emit `OUT_DIR/schema_modules.rs`: the `pub mod schema { pub mod <stem>_capnp
 /// { include!(...) } }` tree `lib.rs` includes. One module per compiled file,
 /// and nothing else — so a family whose feature is off has NO module here.
@@ -208,16 +266,27 @@ fn write_schema_modules(out_dir: &Path, files: &[String], binary_version: &str) 
         .unwrap_or_else(|e| panic!("build.rs: cannot write schema_modules.rs: {e}"));
 }
 
-/// Emit `OUT_DIR/contract.rs`: two GENERATED lookups the CLI depends on.
+/// Emit `OUT_DIR/contract.rs`: the GENERATED lookups the CLI depends on.
 ///
 /// 1. `schema_id(stem)` — the canonical id (`@0x…` line) per schema, used as
-///    the frame's `interfaceId` and printed by `--verbose`.
+///    the schema identity and printed by `--verbose`.
 /// 2. `fields_of(struct_name)` — the ordered field names of every struct the
 ///    enabled schemas declare, so the selector's "unknown field" usage error
 ///    names the VALID fields from the schema rather than a hand-list (law).
+/// 3. `interface_by_name` / `interface_by_schema_id` — the contract INTERFACE
+///    a command names, with the capnp **interface type id** taken from the
+///    generated bindings (never a hand-written constant).
+/// 4. `methods_of` / `method_id` — the methods of an interface and the capnp
+///    **method id** each one carries, parsed from the canonical source: the
+///    dispatcher resolves a command's method by NAME, so no ordinal is ever
+///    hand-written in the CLI.
 fn write_contract(out_dir: &Path, schema_dir: &Path, files: &[String], binary_version: &str) {
     let mut ids = String::new();
     let mut field_arms = String::new();
+    let mut stem_arms = String::new();
+    let mut interface_arms = String::new();
+    let mut named_arms = String::new();
+    let mut method_arms = String::new();
 
     for file in files {
         let stem = schema_file_to_stem(file);
@@ -226,6 +295,7 @@ fn write_contract(out_dir: &Path, schema_dir: &Path, files: &[String], binary_ve
             .unwrap_or_else(|e| panic!("build.rs: cannot read {}: {e}", path.display()));
         if let Some(id) = schema_id_of(&source) {
             ids.push_str(&format!("    \"{stem}\" => Some({id}),\n"));
+            stem_arms.push_str(&format!("    {id} => Some(\"{stem}\"),\n"));
         }
         for (name, names) in struct_fields(&source) {
             // A struct name can be declared by more than one schema (the
@@ -243,25 +313,77 @@ fn write_contract(out_dir: &Path, schema_dir: &Path, files: &[String], binary_ve
                 field_arms.push_str(&format!("    \"{name}\" => Some(&[{list}]),\n"));
             }
         }
+        // The INTERFACES this schema declares, with their methods.
+        let module = schema_module_name(file);
+        for (interface, methods) in interface_methods(&source) {
+            let snake = camel_to_snake_case(&interface);
+            let client = format!("crate::schema::{module}::{snake}::Client");
+            let info = format!(
+                "InterfaceInfo {{ stem: \"{stem}\", name: \"{interface}\", \
+                 type_id: <{client} as ::capnp::traits::HasTypeId>::TYPE_ID }}"
+            );
+            interface_arms.push_str(&format!("        (\"{stem}\", \"{interface}\") => Some({info}),\n"));
+            // The same interface, reachable by its name alone: the first
+            // schema that declares a name wins, exactly as `fields_of` does.
+            if !named_arms.contains(&format!("        \"{interface}\" =>")) {
+                named_arms.push_str(&format!("        \"{interface}\" => Some({info}),\n"));
+            }
+            let list = methods
+                .iter()
+                .map(|(name, ordinal)| format!("(\"{name}\", {ordinal})"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            method_arms.push_str(&format!(
+                "        (\"{stem}\", \"{interface}\") => &[{list}],\n"
+            ));
+        }
     }
 
     let out = format!(
         "// @generated by build.rs — DO NOT EDIT.\n\
          // triad: {binary_version} | capnpc {CAPNPC_VERSION} | capnp {CAPNP_VERSION}\n\n\
          pub mod contract {{\n\
+         /// A contract interface, by identity: the schema it lives in, the\n\
+         /// name the schema gives it, and the capnp INTERFACE TYPE ID the\n\
+         /// generated bindings assign to it.\n\
+         #[derive(Clone, Copy, Debug, PartialEq, Eq)]\n\
+         pub struct InterfaceInfo {{\n\
+         /// The schema stem the interface lives in (\"network\", \"dns\", …).\n\
+         pub stem: &'static str,\n\
+         /// The interface name, as the schema spells it (\"Network\").\n\
+         pub name: &'static str,\n\
+         /// The capnp interface type id (what an RPC call carries).\n\
+         pub type_id: u64,\n\
+         }}\n\n\
          /// The canonical schema id (`@0x…`) per schema stem.\n\
          pub fn schema_id(stem: &str) -> Option<u64> {{\n    match stem {{\n{ids}        _ => None,\n    }}\n}}\n\n\
+         /// The schema stem a canonical schema id names.\n\
+         pub fn stem_for_schema_id(id: u64) -> Option<&'static str> {{\n    match id {{\n{stem_arms}        _ => None,\n    }}\n}}\n\n\
          /// The ordered field names of a contract struct, by its schema name.\n\
          /// GENERATED from the canonical source: the selector's \"valid fields\"\n\
          /// usage error reads this, so it can never drift from the contract.\n\
-         pub fn fields_of(struct_name: &str) -> Option<&'static [&'static str]> {{\n    match struct_name {{\n{field_arms}        _ => None,\n    }}\n}}\n}}\n"
+         pub fn fields_of(struct_name: &str) -> Option<&'static [&'static str]> {{\n    match struct_name {{\n{field_arms}        _ => None,\n    }}\n}}\n\n\
+         /// The contract interface a command names, by schema stem and name.\n\
+         pub fn interface_by_name(stem: &str, interface: &str) -> Option<InterfaceInfo> {{\n    match (stem, interface) {{\n{interface_arms}        _ => None,\n    }}\n}}\n\n\
+         /// The contract interface a NAME refers to (the first schema that\n\
+         /// declares that name wins, exactly as `fields_of` does).\n\
+         pub fn interface_named(interface: &str) -> Option<InterfaceInfo> {{\n    match interface {{\n{named_arms}        _ => None,\n    }}\n}}\n\n\
+         /// The methods of a contract interface: the name the schema spells it\n\
+         /// and the capnp METHOD ID (the declared ordinal) it carries.\n\
+         pub fn methods_of(stem: &str, interface: &str) -> &'static [(&'static str, u16)] {{\n    match (stem, interface) {{\n{method_arms}        _ => &[],\n    }}\n}}\n\n\
+         /// The capnp method id of one method of one interface.\n\
+         pub fn method_id(stem: &str, interface: &str, method: &str) -> Option<u16> {{\n    methods_of(stem, interface)\n\
+        .iter()\n\
+        .find(|(name, _)| *name == method)\n\
+        .map(|(_, id)| *id)\n\
+}}\n}}\n"
     );
     std::fs::write(out_dir.join("contract.rs"), out)
         .unwrap_or_else(|e| panic!("build.rs: cannot write contract.rs: {e}"));
 }
 
 // ═════════════════════════════════════════════════════════════════════════
-// Post-processing — PORTED from smart-lib-ng's src/codegen/mod.rs. capnp 0.27
+// Post-processing — PORTED from the sibling implementation's src/codegen/mod.rs. capnp 0.27
 // emits bare `Box<..>`, `Vec` and `.to_string()` in interface code; in a
 // no_std crate those names are not in scope, so we inject the alloc imports at
 // every module boundary of a file that contains interface code. `String` is
@@ -343,7 +465,7 @@ fn inject_alloc_imports(source: &str) -> String {
 // ═════════════════════════════════════════════════════════════════════════
 // Minimal capnp source analysis: imports, schema id, struct field names.
 // Comments are stripped first (the contract's prose names *deleted* schemas,
-// and a naive match would resurrect them). These mirror smart-lib's codegen
+// and a naive match would resurrect them). These mirror the sibling implementation's codegen
 // helpers so both consumers read the canonical source the same way.
 // ═════════════════════════════════════════════════════════════════════════
 
@@ -484,6 +606,94 @@ fn field_name(t: &str) -> Option<String> {
     } else {
         Some(ident)
     }
+}
+
+/// Every `interface Name { … }` in a schema source, with its methods and the
+/// capnp METHOD ID each one carries (its declared ordinal).
+///
+/// Only the interface's OWN members are read: a nested `struct` body inside
+/// an interface would otherwise leak its fields as "methods", so bodies are
+/// tracked by depth and only a member at the interface's first level counts.
+fn interface_methods(source: &str) -> Vec<(String, Vec<(String, u16)>)> {
+    let code = strip_capnp_comments(source);
+    let mut out: Vec<(String, Vec<(String, u16)>)> = Vec::new();
+    // (interface name, methods, body depth) — `None` marks a non-interface body.
+    let mut stack: Vec<(Option<String>, Vec<(String, u16)>, i32)> = Vec::new();
+
+    for line in code.lines() {
+        let t = line.trim();
+        if let Some(name) = opening_type(t, "interface") {
+            stack.push((Some(name), Vec::new(), 0));
+        } else if opening_type(t, "struct").is_some()
+            || opening_type(t, "enum").is_some()
+            || t.starts_with("union")
+        {
+            stack.push((None, Vec::new(), 0));
+        }
+
+        // A method at the interface's own level: `name @N (params) -> …;`
+        // (depth 1 = directly inside the interface's own braces).
+        if let Some((Some(_), methods, depth)) = stack.last_mut() {
+            if *depth == 1 {
+                if let Some((name, ordinal)) = method_declaration(t) {
+                    if !methods.iter().any(|(existing, _)| existing == &name) {
+                        methods.push((name, ordinal));
+                    }
+                }
+            }
+        }
+
+        let opens = t.matches('{').count() as i32;
+        let closes = t.matches('}').count() as i32;
+        for _ in 0..opens {
+            if let Some(last) = stack.last_mut() {
+                last.2 += 1;
+            }
+        }
+        for _ in 0..closes {
+            if let Some(last) = stack.last_mut() {
+                last.2 -= 1;
+            }
+            if let Some((name, methods, _)) = stack.pop() {
+                if let Some(name) = name {
+                    out.push((name, methods));
+                }
+            }
+        }
+    }
+    out
+}
+
+/// A method declaration line: `name @ORDINAL ( …` — the identifier and the
+/// ordinal the schema declares. The ordinal IS the capnp method id.
+fn method_declaration(t: &str) -> Option<(String, u16)> {
+    let name = field_name(t)?;
+    let at = t.find(" @")?;
+    let after = t[at + 2..].trim_start();
+    let digits: String = after.chars().take_while(|c| c.is_ascii_digit()).collect();
+    if digits.is_empty() {
+        return None;
+    }
+    // A method declaration opens a parameter list; a plain field does not.
+    let rest = after[digits.len()..].trim_start();
+    if !rest.starts_with('(') {
+        return None;
+    }
+    let ordinal = digits.parse().ok()?;
+    Some((name, ordinal))
+}
+
+/// The module name capnp codegen uses for an interface: the interface name in
+/// snake case (`CliService` → `cli_service`), exactly as `capnpc` spells it.
+fn camel_to_snake_case(name: &str) -> String {
+    let mut out = String::with_capacity(name.len() + 4);
+    for (index, c) in name.chars().enumerate() {
+        if c.is_uppercase() && index > 0 {
+            out.push('_');
+        }
+        out.push(c.to_ascii_lowercase());
+    }
+    out
 }
 
 fn schema_file_to_stem(file: &str) -> &str {

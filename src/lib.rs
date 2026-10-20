@@ -3,15 +3,15 @@
 //! ## The architecture law (the founder's correction), obeyed here
 //!
 //! This crate is a **capnp client of the contract and nothing else**. It does
-//! not know smart-lib: there is no path dependency, no re-export, no link. The
+//! not know an implementation crate: there is no path dependency, no re-export, no link. The
 //! only dependency in the graph is the contract — the `capnp` runtime plus the
 //! bindings `build.rs` generates from `../smart-protocol-official/schema`
 //! (read-only). `cargo tree` here names capnp/capnpc/smart-cli only; the
-//! Cargo.lock carries no smart-lib entry.
+//! Cargo.lock carries no an implementation crate entry.
 //!
 //! ## AI-first (the CLI is one client among many)
 //!
-//! The library core — [`transport`], [`frame`], [`json`], [`selector`],
+//! The library core — [`transport`], [`rpc`], [`json`], [`selector`],
 //! [`watch`] plus the generated [`schema`] bindings — is exactly the surface an
 //! agent uses to acquire a capability and drive the domain with **no shell in
 //! the loop**. The [`cmd`] modules add parsing and rendering and add NO
@@ -35,8 +35,13 @@ include!(concat!(env!("OUT_DIR"), "/contract.rs"));
 include!(concat!(env!("OUT_DIR"), "/schema_modules.rs"));
 
 // ── Client core (no_std + alloc unless noted): the AI-first surface ──
-pub mod frame; // the serve frame codec (a fixed-offset wire spec, both sides)
 pub mod json; // contract-shaped JSON: keys verbatim, values from the readers
+// Runtime contract introspection: a schema the CLI never compiled. The
+// generic path talks to a live service, so it is host I/O (std) like the
+// transport and the RPC runtime.
+#[cfg(feature = "std")]
+pub mod dynamic;
+pub mod present; // the presenter framework: cells, widths, box tables, glyphs
 pub mod selector; // `--where field op value` with schema-generated validation
 pub mod watch; // bounded subscription pulls with drop counting
 pub mod registry; // the exit-code table and the availability honesty helpers
@@ -64,9 +69,10 @@ pub mod profile; // the CLI-local state file (TOML subset; no contract route)
 ))]
 pub mod completions;
 
-// The socket transports are host I/O (std), exactly like smart-lib's
-// UnixSocket/Tcp gating; the frame codec above is the schema-blind half that
-// stays no_std.
+// The socket transports and the RPC runtime are host I/O (std); the JSON
+// emitters, the selector and the watch accounting above stay no_std.
+#[cfg(feature = "std")]
+pub mod rpc; // the contract's own call model: capnp RPC over a byte stream
 #[cfg(feature = "std")]
 pub mod transport;
 #[cfg(feature = "std")]
@@ -84,5 +90,5 @@ pub mod remote;
 ))]
 pub mod cmd;
 
-/// Crate name used by the architecture-law CI grep (no "smart-lib" anywhere).
+/// Crate name used by the architecture-law CI grep (no "an implementation crate" anywhere).
 pub const CRATE_NAME: &str = "smart-cli";

@@ -38,7 +38,7 @@ pub fn run(sub: &[String], app: &mut App) -> i32 {
                 spec.set_max_frame_size(64 * 1024);
                 p.reborrow().set_recipient(&recipient);
             });
-            go(app, "Tunnel", "open", 0, &params, Handler { json: tunnel_handle, human: tunnel_handle_human })
+            go(app, "TunnelService", "open", &params, Handler { json: tunnel_handle, human: tunnel_handle_human })
         }
         "close" => {
             let Some(id) = rest.first().and_then(|s| s.parse::<u64>().ok()) else {
@@ -46,7 +46,7 @@ pub fn run(sub: &[String], app: &mut App) -> i32 {
                 return crate::registry::EXIT_USAGE;
             };
             let params = msg(|m| { m.init_root::<wire::close_params::Builder<'_>>().reborrow().init_handle().init_id().set_id(id); });
-            go(app, "Tunnel", "close", 6, &params, super::VOID)
+            go(app, "TunnelService", "close", &params, super::VOID)
         }
         "info" => {
             let Some(id) = rest.first().and_then(|s| s.parse::<u64>().ok()) else {
@@ -54,7 +54,7 @@ pub fn run(sub: &[String], app: &mut App) -> i32 {
                 return crate::registry::EXIT_USAGE;
             };
             let params = msg(|m| { m.init_root::<wire::get_info_params::Builder<'_>>().reborrow().init_handle().init_id().set_id(id); });
-            go(app, "Tunnel", "getInfo", 10, &params, Handler { json: tunnel_info, human: tunnel_info_human })
+            go(app, "TunnelService", "getInfo", &params, Handler { json: tunnel_info, human: tunnel_info_human })
         }
         _ => {
             super::usage_error_app(app, "usage: tunnel open <recipient> | tunnel info <id> | tunnel close <id>");

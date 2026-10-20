@@ -33,9 +33,16 @@ fn headless_example_source_links_no_command_surface() {
             "the headless path must not reference command/rendering code ({banned})"
         );
     }
-    // The scenario uses ONLY the contract client core.
+    // The scenario uses ONLY the contract client core: the transport, the
+    // contract's own generated bindings, and the contract's own call model.
     assert!(scenario.contains("smart_cli::transport"));
-    assert!(scenario.contains("smart_cli::frame"));
+    assert!(scenario.contains("smart_cli::schema"));
+    // The second wire vocabulary is GONE: the headless path speaks the
+    // contract's own call model, so no frame codec may be linked.
+    assert!(
+        !scenario.contains("smart_cli::frame"),
+        "the frame codec is deleted: the headless path speaks capnp RPC"
+    );
 }
 
 /// The binary graph proof (knowledge/05 §4.6): the example `cargo test` just
@@ -79,8 +86,13 @@ fn headless_binary_graph_excludes_the_command_modules() {
         "the headless binary must link the transport core"
     );
     assert!(
-        count("smart_cli::frame") > 0,
-        "the headless binary must link the frame codec"
+        count("smart_cli::rpc") > 0,
+        "the headless binary must link the contract's own call model"
+    );
+    assert_eq!(
+        count("smart_cli::frame"),
+        0,
+        "the headless binary must NOT link a second wire vocabulary"
     );
 }
 

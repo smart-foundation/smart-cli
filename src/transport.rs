@@ -1,21 +1,33 @@
-//! The client transport: connect to the service over a host socket, run the
-//! ABI handshake, and speak the serve frame codec ([`crate::frame`]) over it.
+//! The client transport: an **open registry** of transport schemes, the
+//! endpoint resolution law (the bootstrap), and the connection that speaks the
+//! contract's own call model (capnp RPC) over the transport's byte stream.
 //!
-//! This is the CLI's OWN client of the contract's transports — it does not use
-//! smart-lib's transport crate (the architecture law). The stream framing is
-//! the contract's stream format: `u32be total | kind:u8 | payload`, where the
-//! length never counts itself, and a serve frame rides as the single segment
-//! of a one-segment capnp message inside a KIND_DATA frame.
+//! # The open transport registry
 //!
-//! ```text
-//! frame := u32be total_len | kind:u8 | payload
-//! kind 0x01 DATA  payload = one capnp flat message
-//! ```
+//! The contract's `ServiceEndpoint.transport` is an OPEN token: the schema
+//! names a transport by a token and does not enumerate the tokens. So the
+//! client keeps an OPEN registry of the schemes it can speak; a scheme it does
+//! not know is reported **honestly** — with the schemes it does know — never
+//! rejected as if the peer were broken.
 //!
-//! The connect sequence (per knowledge/05 §1.1): connect -> handshake ->
-//! calls. The handshake is the contract's own `AbiHandshakeRequest`, whose
-//! `matched` answer names the served schema id — so a caller can see exactly
-//! which contract it reached.
+//! # The endpoint resolution law (the bootstrap)
+//!
+//! 1. `--endpoint <scheme>://<address>` on the command line;
+//! 2. `$SMART_ENDPOINT`;
+//! 3. the configuration file (`$XDG_CONFIG_HOME/smart-cli/endpoint`, else
+//!    `~/.config/smart-cli/endpoint`);
+//! 4. the platform's runtime-directory convention
+//!    (`$XDG_RUNTIME_DIR/smart-cli/service.sock`, else the platform's
+//!    temporary directory).
+//!
+//! Nothing in this file names an implementation: no service, no daemon, no
+//! library, and no hard-coded socket path. When no source answers, the CLI
+//! refuses **honestly** and names this order back to the user.
+//!
+//! # The call
+//!
+//! The connection speaks capnp RPC ([`crate::rpc`]): the envelope is capnp
+//! RPC's and the payload is the contract's own params/results structs.
 
 use alloc::format;
 use alloc::string::{String, ToString};
@@ -24,89 +36,395 @@ use core::time::Duration;
 
 use capnp::message::ReaderOptions;
 
-use crate::frame::{self, ResponseView};
+use crate::rpc;
 use crate::schema::{abi_capnp, types_capnp};
 
-/// Stream frame kind: a capnp data (or handshake) message.
-const KIND_DATA: u8 = 0x01;
-
-/// Declared maximum frame size in bytes (matches the service's 64 MiB bound).
-const MAX_FRAME_BYTES: u32 = 64 * 1024 * 1024;
-
-/// The default socket path, overridable by `$SMART_SERVICE_SOCKET`.
-pub const DEFAULT_SOCKET: &str = "/tmp/smart-service.sock";
-
-/// The default RPC timeout applied to every blocking read.
+/// The default RPC timeout applied to every blocking call.
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// Where to connect: the `--connect <path>` / `--addr host:port` / default law.
-#[derive(Clone, Debug)]
-pub enum Target {
-    /// A unix socket path (a leading NUL denotes the Linux abstract namespace).
-    Unix(String),
-    /// A `host:port` TCP address.
-    Tcp(String),
+/// The contract's namespace, as the handshake declares it.
+pub const NAMESPACE: &str = "smart-protocol";
+
+/// The scheme token of the unix-domain transport.
+pub const SCHEME_UNIX: &str = "unix";
+
+/// The scheme token of the TCP transport.
+pub const SCHEME_TCP: &str = "tcp";
+
+/// Where to connect: a transport **scheme token** and an address.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Endpoint {
+    /// The open scheme token ("unix", "tcp", …).
+    pub scheme: String,
+    /// The scheme's address (a socket path, a `host:port`, …).
+    pub address: String,
 }
 
-/// A concrete byte stream (unix or tcp); names no platform in a required API.
+impl Endpoint {
+    /// Build an endpoint from a scheme and an address.
+    pub fn new(scheme: &str, address: &str) -> Self {
+        Self {
+            scheme: scheme.to_string(),
+            address: address.to_string(),
+        }
+    }
+
+    /// Parse `<scheme>://<address>`.
+    ///
+    /// The scheme is REQUIRED: an endpoint that does not name one cannot be
+    /// routed, and the honest answer names the schemes this client speaks.
+    pub fn parse(text: &str) -> Result<Self, String> {
+        let text = text.trim();
+        let Some((scheme, address)) = text.split_once("://") else {
+            return Err(format!(
+                "the endpoint `{text}` names no transport scheme; write it as \
+                 `<scheme>://<address>` (this client speaks: {})",
+                SCHEME_UNIX,
+            ));
+        };
+        let scheme = scheme.trim().to_string();
+        if scheme.is_empty() {
+            return Err(format!(
+                "the endpoint `{text}` names no transport scheme; write it as \
+                 `<scheme>://<address>` (this client speaks: {})",
+                SCHEME_UNIX,
+            ));
+        }
+        Ok(Self {
+            scheme,
+            address: address.to_string(),
+        })
+    }
+
+    /// The audit-trail label: `<scheme>:<address>`.
+    pub fn label(&self) -> String {
+        format!("{}:{}", self.scheme, self.address)
+    }
+}
+
+/// A transport's byte stream, split into the two halves the RPC runtime
+/// reads and writes.
+pub struct Stream {
+    /// The read half.
+    pub reader: Box<dyn std::io::Read + Send>,
+    /// The write half.
+    pub writer: Box<dyn std::io::Write + Send>,
+}
+
+/// One transport the client can speak: an open scheme token and how to open
+/// it.
+pub trait Transport: Send + Sync {
+    /// The scheme token this transport answers to.
+    fn scheme(&self) -> &str;
+    /// Open the transport at `address`.
+    fn connect(&self, address: &str) -> Result<Stream, CallError>;
+}
+
+/// The open set of transports the client speaks.
 ///
-/// The non-unix `Unix` variant exists only so the type is constructible on a
-/// target without AF_UNIX; [`Connection::connect`] refuses a unix target
-/// there, so the variant is never built and its Read/Write stubs never run.
-#[cfg_attr(not(unix), allow(dead_code))]
-enum Stream {
-    #[cfg(unix)]
-    Unix(std::os::unix::net::UnixStream),
-    #[cfg(not(unix))]
-    Unix(core::marker::PhantomData<()>),
-    Tcp(std::net::TcpStream),
+/// The set is OPEN: a caller may register another scheme. A scheme that is
+/// not registered is reported honestly, with the schemes that are.
+#[derive(Default)]
+pub struct TransportRegistry {
+    transports: Vec<Box<dyn Transport>>,
 }
 
-impl Stream {
-    fn set_read_timeout(&self, dur: Option<Duration>) {
-        match self {
-            #[cfg(unix)]
-            Stream::Unix(s) => {
-                let _ = s.set_read_timeout(dur);
-            }
-            #[cfg(not(unix))]
-            Stream::Unix(_) => {}
-            Stream::Tcp(s) => {
-                let _ = s.set_read_timeout(dur);
-            }
+impl TransportRegistry {
+    /// A registry with the transports every build speaks.
+    pub fn with_defaults() -> Self {
+        let mut registry = Self::default();
+        registry.register(Box::new(UnixTransport));
+        registry.register(Box::new(TcpTransport));
+        registry
+    }
+
+    /// Register a transport. A scheme may be registered once; the first
+    /// registration wins.
+    pub fn register(&mut self, transport: Box<dyn Transport>) {
+        let scheme = transport.scheme().to_string();
+        if self.transports.iter().any(|t| t.scheme() == scheme) {
+            return;
+        }
+        self.transports.push(transport);
+    }
+
+    /// The scheme tokens this registry speaks.
+    pub fn schemes(&self) -> Vec<&str> {
+        self.transports.iter().map(|t| t.scheme()).collect()
+    }
+
+    /// Open an endpoint.
+    ///
+    /// An unknown scheme is an honest "unavailable, with the reason": the
+    /// peer is not broken, this client simply does not speak that transport.
+    pub fn connect(&self, endpoint: &Endpoint) -> Result<Stream, CallError> {
+        let Some(transport) = self
+            .transports
+            .iter()
+            .find(|t| t.scheme() == endpoint.scheme)
+        else {
+            return Err(CallError::Unavailable {
+                what: format!("the transport scheme `{}`", endpoint.scheme),
+                reason: format!(
+                    "this client speaks: {}",
+                    self.schemes().join(", ")
+                ),
+            });
+        };
+        transport.connect(&endpoint.address)
+    }
+}
+
+/// The unix-domain transport.
+pub struct UnixTransport;
+
+impl Transport for UnixTransport {
+    fn scheme(&self) -> &str {
+        SCHEME_UNIX
+    }
+
+    fn connect(&self, address: &str) -> Result<Stream, CallError> {
+        #[cfg(unix)]
+        {
+            let stream = std::os::unix::net::UnixStream::connect(address).map_err(|e| {
+                CallError::Transport(format!("connect unix {address} failed: {e}"))
+            })?;
+            let reader = stream
+                .try_clone()
+                .map_err(|e| CallError::Transport(format!("cannot split the socket: {e}")))?;
+            let writer = stream
+                .try_clone()
+                .map_err(|e| CallError::Transport(format!("cannot split the socket: {e}")))?;
+            Ok(Stream {
+                reader: Box::new(reader),
+                writer: Box::new(writer),
+            })
+        }
+        #[cfg(not(unix))]
+        {
+            Err(CallError::Unavailable {
+                what: format!("the transport scheme `{address}`"),
+                reason: "this target has no AF_UNIX socket support".to_string(),
+            })
         }
     }
 }
 
-impl std::io::Read for Stream {
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+/// The TCP transport.
+pub struct TcpTransport;
+
+impl Transport for TcpTransport {
+    fn scheme(&self) -> &str {
+        SCHEME_TCP
+    }
+
+    fn connect(&self, address: &str) -> Result<Stream, CallError> {
+        let stream = std::net::TcpStream::connect(address)
+            .map_err(|e| CallError::Transport(format!("connect tcp {address} failed: {e}")))?;
+        let reader = stream
+            .try_clone()
+            .map_err(|e| CallError::Transport(format!("cannot split the socket: {e}")))?;
+        let writer = stream
+            .try_clone()
+            .map_err(|e| CallError::Transport(format!("cannot split the socket: {e}")))?;
+        Ok(Stream {
+            reader: Box::new(reader),
+            writer: Box::new(writer),
+        })
+    }
+}
+
+/// Where a resolved endpoint came from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EndpointSource {
+    /// `--endpoint` on the command line.
+    Flag,
+    /// The `$SMART_ENDPOINT` environment variable.
+    Environment,
+    /// The configuration file.
+    ConfigFile,
+    /// The platform's runtime-directory convention.
+    PlatformDefault,
+}
+
+impl EndpointSource {
+    /// The one-word name the audit trail prints.
+    pub fn name(self) -> &'static str {
         match self {
-            #[cfg(unix)]
-            Stream::Unix(s) => s.read(buf),
-            #[cfg(not(unix))]
-            Stream::Unix(_) => Ok(0),
-            Stream::Tcp(s) => s.read(buf),
+            EndpointSource::Flag => "--endpoint",
+            EndpointSource::Environment => "$SMART_ENDPOINT",
+            EndpointSource::ConfigFile => "config",
+            EndpointSource::PlatformDefault => "platform",
         }
     }
 }
-impl std::io::Write for Stream {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        match self {
-            #[cfg(unix)]
-            Stream::Unix(s) => s.write(buf),
-            #[cfg(not(unix))]
-            Stream::Unix(_) => Ok(buf.len()),
-            Stream::Tcp(s) => s.write(buf),
+
+/// A resolved endpoint and where it came from.
+#[derive(Clone, Debug)]
+pub struct Resolution {
+    /// The endpoint to connect to.
+    pub endpoint: Endpoint,
+    /// Where it came from.
+    pub source: EndpointSource,
+    /// The human name of the source (a flag name, an env var, a file path).
+    pub origin: String,
+}
+
+/// The environment variable the endpoint may come from.
+pub const ENV_ENDPOINT: &str = "SMART_ENDPOINT";
+
+/// The configuration file the endpoint may come from.
+pub fn config_file() -> Option<std::path::PathBuf> {
+    if let Some(dir) = std::env::var_os("XDG_CONFIG_HOME") {
+        if !dir.is_empty() {
+            return Some(std::path::PathBuf::from(dir).join("smart-cli").join("endpoint"));
         }
     }
-    fn flush(&mut self) -> std::io::Result<()> {
-        match self {
-            #[cfg(unix)]
-            Stream::Unix(s) => s.flush(),
-            #[cfg(not(unix))]
-            Stream::Unix(_) => Ok(()),
-            Stream::Tcp(s) => s.flush(),
+    let home = std::env::var_os("HOME")?;
+    if home.is_empty() {
+        return None;
+    }
+    Some(std::path::PathBuf::from(home).join(".config").join("smart-cli").join("endpoint"))
+}
+
+/// The platform's runtime directory, where a socket conventionally lives.
+pub fn runtime_dir() -> std::path::PathBuf {
+    if let Some(dir) = std::env::var_os("XDG_RUNTIME_DIR") {
+        if !dir.is_empty() {
+            return std::path::PathBuf::from(dir).join("smart-cli");
         }
+    }
+    std::env::temp_dir().join("smart-cli")
+}
+
+/// The platform's runtime-directory convention, as an endpoint.
+fn platform_endpoint() -> Endpoint {
+    let path = runtime_dir().join("service.sock");
+    Endpoint::new(SCHEME_UNIX, &path.to_string_lossy())
+}
+
+/// Resolve the endpoint, in the order the bootstrap law names:
+///
+/// 1. `--endpoint <scheme>://<address>`;
+/// 2. `$SMART_ENDPOINT`;
+/// 3. the configuration file;
+/// 4. the platform's runtime-directory convention.
+///
+/// When no source answers, the CLI refuses **honestly** and names this order
+/// back to the user — it never invents a socket path.
+pub fn resolve_endpoint(flag: Option<&str>) -> Result<Resolution, String> {
+    if let Some(text) = flag {
+        let text = text.trim();
+        if !text.is_empty() {
+            return Ok(Resolution {
+                endpoint: Endpoint::parse(text)?,
+                source: EndpointSource::Flag,
+                origin: "--endpoint".to_string(),
+            });
+        }
+    }
+    if let Ok(text) = std::env::var(ENV_ENDPOINT) {
+        let text = text.trim();
+        if !text.is_empty() {
+            return Ok(Resolution {
+                endpoint: Endpoint::parse(text)?,
+                source: EndpointSource::Environment,
+                origin: format!("${ENV_ENDPOINT}"),
+            });
+        }
+    }
+    if let Some(path) = config_file() {
+        if let Ok(text) = std::fs::read_to_string(&path) {
+            let text = text.trim();
+            if !text.is_empty() {
+                return Ok(Resolution {
+                    endpoint: Endpoint::parse(text)?,
+                    source: EndpointSource::ConfigFile,
+                    origin: path.display().to_string(),
+                });
+            }
+        }
+    }
+    Ok(Resolution {
+        endpoint: platform_endpoint(),
+        source: EndpointSource::PlatformDefault,
+        origin: runtime_dir().display().to_string(),
+    })
+}
+
+/// The order the endpoint resolution follows, named for the honest refusal.
+pub fn resolution_order() -> String {
+    format!(
+        "--endpoint <scheme>://<address>, ${ENV_ENDPOINT}, the configuration file ({}), \
+         then the platform runtime directory ({})",
+        config_file()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| "unavailable".to_string()),
+        runtime_dir().display()
+    )
+}
+
+/// A subscription: the contract's own **capability**, with the interface it
+/// belongs to.
+///
+/// The contract models a subscription as a capability the `subscribeX` method
+/// hands back; `pull` and `cancel` are methods OF THAT CAPABILITY. The ids
+/// come from the GENERATED table, so the CLI never writes an ordinal.
+#[derive(Clone)]
+pub struct Subscription {
+    client: capnp::capability::Client,
+    stem: &'static str,
+    interface: &'static str,
+}
+
+impl Subscription {
+    /// Wrap the capability a subscribe answered with.
+    pub fn new(
+        client: capnp::capability::Client,
+        stem: &'static str,
+        interface: &'static str,
+    ) -> Self {
+        Self {
+            client,
+            stem,
+            interface,
+        }
+    }
+
+    /// The subscription's capability.
+    pub fn client(&self) -> &capnp::capability::Client {
+        &self.client
+    }
+
+    /// Pull the next event (the contract's own `pull`).
+    pub fn pull(&self, conn: &mut Connection) -> Result<Vec<u8>, CallError> {
+        let (interface_id, method_id) = self.ids("pull")?;
+        conn.call_capability(&self.client, interface_id, method_id, &[])
+    }
+
+    /// Retire the subscription (the contract's own `cancel`).
+    pub fn cancel(&self, conn: &mut Connection) -> Result<(), CallError> {
+        let (interface_id, method_id) = self.ids("cancel")?;
+        conn.call_capability(&self.client, interface_id, method_id, &[])
+            .map(|_| ())
+    }
+
+    /// The interface and method ids of one of the subscription's methods.
+    fn ids(&self, method: &str) -> Result<(u64, u16), CallError> {
+        let info = crate::contract::interface_by_name(self.stem, self.interface).ok_or_else(|| {
+            CallError::Transport(format!(
+                "the contract interface `{}` is not compiled into this build",
+                self.interface
+            ))
+        })?;
+        let method_id =
+            crate::contract::method_id(self.stem, self.interface, method).ok_or_else(|| {
+                CallError::Transport(format!(
+                    "the contract interface `{}` has no `{method}` method in this build",
+                    self.interface
+                ))
+            })?;
+        Ok((info.type_id, method_id))
     }
 }
 
@@ -119,7 +437,7 @@ pub struct Handshake {
     pub schema_ids: Vec<u64>,
 }
 
-/// A decode of the contract `T.Error` a service error frame carried.
+/// A decode of the contract `T.Error` a service error carried.
 #[derive(Clone, Debug)]
 pub struct ServiceError {
     /// The contract error code.
@@ -155,10 +473,17 @@ impl ServiceError {
 /// Why a call failed. Total: every failure is transport-level or service-level.
 #[derive(Clone, Debug)]
 pub enum CallError {
-    /// The frame transport itself failed (io/framing/deadline).
+    /// The transport itself failed (io/framing/deadline).
     Transport(String),
-    /// The service answered an error frame carrying the contract's own `T.Error`.
+    /// The service answered with the contract's own `T.Error`.
     Service(ServiceError),
+    /// The command cannot run here, and the reason is known.
+    Unavailable {
+        /// What is unavailable (a transport scheme, a capability, …).
+        what: String,
+        /// Why it is unavailable, in the contract's own "why" voice.
+        reason: String,
+    },
 }
 
 impl core::fmt::Display for CallError {
@@ -166,14 +491,51 @@ impl core::fmt::Display for CallError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             CallError::Transport(detail) => write!(f, "transport: {detail}"),
-            CallError::Service(error) => write!(f, "{}: {}", json_error_token(&error.code), error.message),
+            CallError::Service(error) => {
+                write!(f, "{}: {}", json_error_token(&error.code), error.message)
+            }
+            CallError::Unavailable { what, reason } => write!(f, "{what} is unavailable: {reason}"),
         }
     }
 }
 
+/// Read a contract error code token back. `None` for a token the contract does
+/// not declare — never a guess.
+pub fn code_from_token(token: &str) -> Option<types_capnp::ErrorCode> {
+    use types_capnp::ErrorCode as E;
+    Some(match token {
+        "notFound" => E::NotFound,
+        "permissionDenied" => E::PermissionDenied,
+        "failed" => E::Failed,
+        "temporary" => E::Temporary,
+        "unavailable" => E::Unavailable,
+        "limitExceeded" => E::LimitExceeded,
+        "outOfMemory" => E::OutOfMemory,
+        "invalidArgument" => E::InvalidArgument,
+        "timeout" => E::Timeout,
+        "cancelled" => E::Cancelled,
+        "alreadyExists" => E::AlreadyExists,
+        "notSupported" => E::NotSupported,
+        "conflict" => E::Conflict,
+        "unknown" => E::Unknown,
+        "hardwareFault" => E::HardwareFault,
+        "driverError" => E::DriverError,
+        "protocolViolation" => E::ProtocolViolation,
+        "busError" => E::BusError,
+        "thermalThrottling" => E::ThermalThrottling,
+        "powerStateFailure" => E::PowerStateFailure,
+        _ => return None,
+    })
+}
+
+/// The stable token for an error code (shared with the JSON `error` object).
+fn json_error_token(code: &types_capnp::ErrorCode) -> &'static str {
+    crate::json::error_code(*code)
+}
+
 /// One connected, handshaken session to the service.
 pub struct Connection {
-    stream: Stream,
+    session: rpc::Session,
     /// The declared transport (for `--verbose`): "unix:/path" / "tcp:host:port".
     label: String,
     /// The matched ABI namespace (surfaced by `--verbose`).
@@ -184,37 +546,20 @@ pub struct Connection {
 }
 
 impl Connection {
-    /// Connect and run the ABI handshake in one step.
-    pub fn connect(target: &Target) -> Result<Self, CallError> {
-        let (stream, label) = match target {
-            #[cfg(unix)]
-            Target::Unix(path) => {
-                let stream = std::os::unix::net::UnixStream::connect(path).map_err(|e| {
-                    CallError::Transport(format!("connect unix {path} failed: {e}"))
-                })?;
-                (Stream::Unix(stream), format!("unix:{path}"))
-            }
-            #[cfg(not(unix))]
-            Target::Unix(_path) => {
-                // On a target with no AF_UNIX (Windows; macOS HAS AF_UNIX, so
-                // this arm is Windows-only) the unix transport cannot exist.
-                // The honest answer names the alternative rather than
-                // pretending a service is absent.
-                return Err(CallError::Transport(
-                    "this target has no AF_UNIX socket support, so the default unix transport \
-                     cannot be used: select the TCP transport with `--addr host:port` or `@host:port`"
-                        .into(),
-                ));
-            }
-            Target::Tcp(addr) => {
-                let stream = std::net::TcpStream::connect(addr)
-                    .map_err(|e| CallError::Transport(format!("connect tcp {addr} failed: {e}")))?;
-                (Stream::Tcp(stream), format!("tcp:{addr}"))
-            }
-        };
+    /// Open an endpoint and run the ABI handshake in one step.
+    pub fn connect(endpoint: &Endpoint) -> Result<Self, CallError> {
+        Self::connect_with(&TransportRegistry::with_defaults(), endpoint)
+    }
+
+    /// Open an endpoint over a specific transport registry.
+    pub fn connect_with(
+        registry: &TransportRegistry,
+        endpoint: &Endpoint,
+    ) -> Result<Self, CallError> {
+        let stream = registry.connect(endpoint)?;
         let mut conn = Connection {
-            stream,
-            label,
+            session: rpc::Session::connect(stream.reader, stream.writer)?,
+            label: endpoint.label(),
             namespace: String::new(),
             schema_ids: Vec::new(),
             timeout: DEFAULT_TIMEOUT,
@@ -238,34 +583,38 @@ impl Connection {
         &self.schema_ids
     }
 
-    /// Override the per-call read timeout (the `5` exit code).
+    /// Override the per-call deadline (the `5` exit code).
     pub fn set_timeout(&mut self, dur: Duration) {
         self.timeout = dur;
     }
 
     /// The peer's host identity where the transport carries one (informational:
     /// the SERVICE decides the capability class, not the client).
-    pub fn peer_identity(&self) -> Option<(i32, u32, u32)> {
+    pub fn peer_identity(&self) -> Option<(i32, u32, i32)> {
         None
     }
 
-    /// The ABI handshake: send `AbiHandshakeRequest`, read `AbiHandshakeResponse`.
+    /// The ABI handshake: the contract's own `AbiHandshakeRequest` over the
+    /// contract's own call model. The answered intersection names the served
+    /// schema ids, so a caller can see exactly which contract it reached.
     fn handshake(&mut self) -> Result<(), CallError> {
+        let interface = crate::contract::interface_by_name("abi", "AbiService").ok_or_else(|| {
+            CallError::Transport("the ABI interface is not compiled into this build".into())
+        })?;
+        let method = crate::contract::method_id("abi", "AbiService", "handshake").ok_or_else(|| {
+            CallError::Transport("the ABI handshake method is not in this build".into())
+        })?;
         let mut message = capnp::message::Builder::new_default();
         {
             let mut request = message.init_root::<abi_capnp::abi_handshake_request::Builder<'_>>();
-            let mut abi = request.reborrow().init_caller_abi();
-            abi.set_namespace("smart-protocol");
+            request.reborrow().init_caller_abi().set_namespace(NAMESPACE);
         }
-        let payload = encode_message(&message);
-        self.write_frame(KIND_DATA, &payload)?;
-        let (_, response_payload) = self.read_frame()?;
-
-        let reader = decode_message::<abi_capnp::abi_handshake_response::Owned>(&response_payload)
+        let payload = self.call(interface.type_id, method, &encode_message(&message))?;
+        let reader = decode_message::<abi_capnp::abi_handshake_response::Owned>(&payload)
             .map_err(CallError::Transport)?;
-        let response = reader.get().map_err(|e| {
-            CallError::Transport(format!("handshake response has no root: {e}"))
-        })?;
+        let response = reader
+            .get()
+            .map_err(|e| CallError::Transport(format!("handshake response has no root: {e}")))?;
         match response.which() {
             Ok(abi_capnp::abi_handshake_response::Which::Matched(abi)) => {
                 let abi = abi.map_err(|e| {
@@ -273,8 +622,8 @@ impl Connection {
                 })?;
                 self.namespace = abi
                     .get_namespace()
-                    .map(|t| t.to_str().unwrap_or("smart-protocol").to_string())
-                    .unwrap_or_else(|_| "smart-protocol".to_string());
+                    .map(|t| t.to_str().unwrap_or(NAMESPACE).to_string())
+                    .unwrap_or_else(|_| NAMESPACE.to_string());
                 for schema in abi.get_schema_versions().into_iter().flatten() {
                     self.schema_ids.push(schema.get_id());
                 }
@@ -282,7 +631,7 @@ impl Connection {
             }
             Ok(abi_capnp::abi_handshake_response::Which::PartialMatch(_)) => {
                 // A partial match still proceeds; the wire is honest per call.
-                self.namespace = "smart-protocol".to_string();
+                self.namespace = NAMESPACE.to_string();
                 Ok(())
             }
             Ok(abi_capnp::abi_handshake_response::Which::Incompatible(error)) => {
@@ -294,7 +643,7 @@ impl Connection {
                     .map(|t| t.to_str().unwrap_or("contract incompatibility").to_string())
                     .unwrap_or_else(|_| "contract incompatibility".to_string());
                 Err(CallError::Transport(format!(
-                    "this service cannot speak the smart-protocol contract: {message}"
+                    "this peer cannot speak the smart-protocol contract: {message}"
                 )))
             }
             Ok(abi_capnp::abi_handshake_response::Which::Unknown(_))
@@ -302,152 +651,58 @@ impl Connection {
         }
     }
 
-    /// Issue one serve call and return the ok payload bytes, or the decoded
-    /// service/transport error.
+    /// Issue one contract call and return the results struct's bytes.
+    ///
+    /// `interface_id` is the contract interface's type id and `method_id` is
+    /// the method's ordinal — both GENERATED (see [`crate::contract`]), never
+    /// hand-written here.
     pub fn call(
         &mut self,
         interface_id: u64,
-        ordinal: u16,
+        method_id: u16,
         params: &[u8],
     ) -> Result<Vec<u8>, CallError> {
-        let frame = frame::encode_request(interface_id, ordinal, params, &[]);
-        self.send_serve_frame(&frame)
-    }
-
-    /// Pull one subscription's next event (bounded). An empty ok payload is a
-    /// real answer ("nothing yet"), never a fabricated event.
-    pub fn pull_subscription(&mut self, sub_id: u64, limit: u32) -> Result<Vec<u8>, CallError> {
-        let params = frame::encode_pull_params(sub_id, limit);
-        let frame = frame::encode_request(0, frame::SUB_PULL, &params, &[]);
-        self.send_serve_frame(&frame)
-    }
-
-    /// Retire a subscription.
-    pub fn cancel_subscription(&mut self, sub_id: u64) -> Result<(), CallError> {
-        let params = frame::encode_cancel_params(sub_id);
-        let frame = frame::encode_request(0, frame::SUB_CANCEL, &params, &[]);
-        self.send_serve_frame(&frame).map(|_| ())
-    }
-
-    /// Wrap a serve frame as a one-segment capnp message, send it, read the
-    /// response, and lift the serve frame back out.
-    fn send_serve_frame(&mut self, serve_frame: &[u8]) -> Result<Vec<u8>, CallError> {
-        let payload = frame::wrap_one_segment(serve_frame);
-        self.write_frame(KIND_DATA, &payload)?;
-        let (_, response_payload) = self.read_frame()?;
-        let segment = frame::segment0(&response_payload)
-            .ok_or_else(|| CallError::Transport("response is not a one-segment serve frame".into()))?;
-        let view: ResponseView<'_> =
-            frame::parse_response(segment).map_err(CallError::Transport)?;
-        if view.is_ok() {
-            Ok(view.payload.to_vec())
-        } else {
-            Err(CallError::Service(decode_error(view)))
-        }
-    }
-
-    /// Write one stream frame: `u32be total | kind | payload` (length never
-    /// counts itself).
-    fn write_frame(&mut self, kind: u8, payload: &[u8]) -> Result<(), CallError> {
-        use std::io::Write;
-        let total = 1u32
-            .checked_add(payload.len() as u32)
-            .ok_or_else(|| CallError::Transport("frame too large".into()))?;
-        if total > MAX_FRAME_BYTES {
-            return Err(CallError::Transport("frame exceeds declared maximum".into()));
-        }
-        let mut buf = Vec::with_capacity(4 + total as usize);
-        buf.extend_from_slice(&total.to_be_bytes());
-        buf.push(kind);
-        buf.extend_from_slice(payload);
-        self.stream.write_all(&buf).map_err(transport_io)?;
-        self.stream.flush().map_err(transport_io)
-    }
-
-    /// Read one stream frame, returning `(kind, payload)`.
-    fn read_frame(&mut self) -> Result<(u8, Vec<u8>), CallError> {
-        
-        self.stream
-            .set_read_timeout(Some(self.timeout));
-        let mut len_buf = [0u8; 4];
-        self.read_exact_timeout(&mut len_buf)?;
-        let total = u32::from_be_bytes(len_buf);
-        if total == 0 || total > MAX_FRAME_BYTES {
-            return Err(CallError::Transport(format!(
-                "declared frame length {total} out of range"
-            )));
-        }
-        let mut payload = alloc::vec![0u8; total as usize];
-        self.read_exact_timeout(&mut payload)?;
-        Ok((payload[0], payload[1..].to_vec()))
-    }
-
-    /// `read_exact` with read-deadline awareness (a deadline maps to the
-    /// timeout the exit-code table publishes as 5).
-    fn read_exact_timeout(&mut self, buf: &mut [u8]) -> Result<(), CallError> {
-        use std::io::Read;
         let deadline = std::time::Instant::now() + self.timeout;
-        let mut read = 0usize;
-        while read < buf.len() {
-            match self.stream.read(&mut buf[read..]) {
-                Ok(0) => {
-                    return Err(CallError::Transport(
-                        "peer closed the connection".to_string(),
-                    ))
-                }
-                Ok(n) => read += n,
-                Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                    if std::time::Instant::now() >= deadline {
-                        return Err(CallError::Service(ServiceError {
-                            code: types_capnp::ErrorCode::Timeout,
-                            message: "the service did not answer within the timeout".to_string(),
-                            context: String::new(),
-                        }));
-                    }
-                }
-                Err(e) => return Err(transport_io(e)),
-            }
-        }
-        Ok(())
+        self.session.call_within(interface_id, method_id, params, deadline)
     }
-}
 
-/// The stable token for an error code (shared with the JSON `error` object).
-fn json_error_token(code: &types_capnp::ErrorCode) -> &'static str {
-    crate::json::error_code(*code)
-}
-
-/// Decode a service error frame's `T.Error` payload into a [`ServiceError`].
-fn decode_error(view: ResponseView<'_>) -> ServiceError {
-    let fallback = ServiceError {
-        code: types_capnp::ErrorCode::Failed,
-        message: view.message_text(),
-        context: String::new(),
-    };
-    if view.payload.is_empty() {
-        return ServiceError {
-            code: types_capnp::ErrorCode::Failed,
-            message: view.message_text(),
-            context: String::new(),
-        };
+    /// The session, for the calls that need a capability (a subscription).
+    pub fn session(&mut self) -> &mut rpc::Session {
+        &mut self.session
     }
-    let Ok(typed) = decode_message::<types_capnp::error::Owned>(view.payload) else {
-        return fallback;
-    };
-    let Ok(reader) = typed.get() else {
-        return fallback;
-    };
-    let code = reader.get_code().unwrap_or(types_capnp::ErrorCode::Failed);
-    ServiceError {
-        code,
-        message: reader.get_message().map(|t| t.to_str().unwrap_or("").to_string()).unwrap_or_default(),
-        context: reader.get_context().map(|t| t.to_str().unwrap_or("").to_string()).unwrap_or_default(),
-    }
-}
 
-/// Map an I/O error into a transport-level call error.
-fn transport_io(e: std::io::Error) -> CallError {
-    CallError::Transport(e.to_string())
+    /// Call a method on a **capability** the contract handed us (a
+    /// subscription), by the contract's own interface and method ids.
+    pub fn call_capability(
+        &mut self,
+        client: &capnp::capability::Client,
+        interface_id: u64,
+        method_id: u16,
+        params: &[u8],
+    ) -> Result<Vec<u8>, CallError> {
+        let deadline = std::time::Instant::now() + self.timeout;
+        self.session
+            .call_capability_within(client, interface_id, method_id, params, deadline)
+    }
+
+    /// Call a method that answers with a **capability** in its results (a
+    /// subscribe). The typed path keeps the capability; the byte path cannot
+    /// (a capability does not survive serialization).
+    pub fn call_typed<P, R>(
+        &mut self,
+        interface_id: u64,
+        method_id: u16,
+        params: P::Reader<'_>,
+    ) -> Result<capnp::capability::Response<R>, CallError>
+    where
+        P: capnp::traits::Owned,
+        R: capnp::traits::Owned + capnp::traits::Pipelined + Unpin + 'static,
+        <R as capnp::traits::Pipelined>::Pipeline: capnp::capability::FromTypelessPipeline,
+    {
+        let deadline = std::time::Instant::now() + self.timeout;
+        self.session
+            .call_typed_within::<P, R>(interface_id, method_id, params, deadline)
+    }
 }
 
 /// Serialize a one-root capnp message to bytes (the wire's flat message form).
@@ -461,7 +716,9 @@ pub fn encode_message(
 }
 
 /// Decode a flat capnp message and read its root reader.
-pub fn decode_message<T>(bytes: &[u8]) -> Result<capnp::message::TypedReader<capnp::serialize::OwnedSegments, T>, String>
+pub fn decode_message<T>(
+    bytes: &[u8],
+) -> Result<capnp::message::TypedReader<capnp::serialize::OwnedSegments, T>, String>
 where
     T: capnp::traits::Owned,
 {
@@ -487,39 +744,54 @@ where
 mod tests {
     use super::*;
 
-    /// A full in-process loopback pair speaking the same framing, so the
-    /// transport codec is proven without a daemon (charter law #8: mock only).
     #[test]
-    fn stream_frame_length_counts_kind_plus_payload_not_itself() {
-        // 4-byte length == 1 (kind) + payload length, big-endian.
-        let payload = [1u8, 2, 3, 4, 5, 6, 7, 8];
-        let total = 1 + payload.len() as u32;
-        let mut frame = Vec::new();
-        frame.extend_from_slice(&total.to_be_bytes());
-        frame.push(KIND_DATA);
-        frame.extend_from_slice(&payload);
-        // The first four bytes read back as total = 9.
-        assert_eq!(u32::from_be_bytes(frame[0..4].try_into().unwrap()), 9);
+    fn an_endpoint_names_its_scheme() {
+        let endpoint = Endpoint::parse("unix:///run/agent.sock").unwrap();
+        assert_eq!(endpoint.scheme, "unix");
+        assert_eq!(endpoint.address, "/run/agent.sock");
+        assert_eq!(endpoint.label(), "unix:/run/agent.sock");
     }
 
     #[test]
-    fn handshake_message_is_a_capnp_abi_request() {
-        let mut message = capnp::message::Builder::new_default();
-        {
-            let mut request = message.init_root::<abi_capnp::abi_handshake_request::Builder<'_>>();
-            request.reborrow().init_caller_abi().set_namespace("smart-protocol");
+    fn an_endpoint_without_a_scheme_is_refused_honestly() {
+        let error = Endpoint::parse("/run/agent.sock").unwrap_err();
+        assert!(error.contains("scheme"), "{error}");
+    }
+
+    #[test]
+    fn an_unknown_scheme_is_unavailable_with_a_reason() {
+        let registry = TransportRegistry::with_defaults();
+        let endpoint = Endpoint::new("carrier-pigeon", "somewhere");
+        match registry.connect(&endpoint) {
+            Err(CallError::Unavailable { what, reason }) => {
+                assert!(what.contains("carrier-pigeon"), "{what}");
+                assert!(reason.contains("unix"), "{reason}");
+                assert!(reason.contains("tcp"), "{reason}");
+            }
+            other => panic!("expected an unavailable answer, got {}", other.err().map(|e| e.to_string()).unwrap_or_else(|| "a stream".into())),
         }
-        let bytes = encode_message(&message);
-        // Round-trips as an AbiHandshakeRequest naming the contract family.
-        let reader = decode_message::<abi_capnp::abi_handshake_request::Owned>(&bytes).unwrap();
-        let request = reader.get().unwrap();
-        let ns = request.get_caller_abi().unwrap().get_namespace().unwrap();
-        assert_eq!(ns.to_str().unwrap(), "smart-protocol");
     }
 
     #[test]
-    fn default_paths_are_sane() {
-        assert_eq!(DEFAULT_SOCKET, "/tmp/smart-service.sock");
-        let _ = DEFAULT_TIMEOUT;
+    fn the_registry_is_open() {
+        struct Shouty;
+        impl Transport for Shouty {
+            fn scheme(&self) -> &str {
+                "shouty"
+            }
+            fn connect(&self, _address: &str) -> Result<Stream, CallError> {
+                Err(CallError::Transport("shouty cannot connect".into()))
+            }
+        }
+        let mut registry = TransportRegistry::with_defaults();
+        registry.register(Box::new(Shouty));
+        assert!(registry.schemes().contains(&"shouty"));
+    }
+
+    #[test]
+    fn the_error_channel_reads_the_contract_code_token_first() {
+        let code = code_from_token("notSupported").unwrap();
+        assert_eq!(code, types_capnp::ErrorCode::NotSupported);
+        assert!(code_from_token("notAThing").is_none());
     }
 }

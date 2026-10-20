@@ -7,6 +7,8 @@
 
 use alloc::format;
 use alloc::string::{String, ToString};
+
+use crate::present;
 use alloc::vec::Vec;
 
 #[cfg(feature = "schema-network")]
@@ -75,15 +77,19 @@ pub fn signal_bar(strength_dbm: i32, width: usize) -> String {
     s
 }
 
-/// A simple column-aligned table from owned rows (decoration; the rows are
-/// borrowed into this text and never kept).
+/// A column-aligned table from owned rows (decoration; the rows are borrowed
+/// into this text and never kept).
+///
+/// The widths are MEASURED, not counted: a width is the number of terminal
+/// columns the text occupies (the presenter framework's measure), so a `◉` or
+/// a CJK glyph lines up with the ASCII beside it instead of guessing.
 pub fn table(headers: &[&str], rows: &[Vec<String>]) -> String {
     let cols = headers.len();
-    let mut widths: Vec<usize> = headers.iter().map(|h| h.len()).collect();
+    let mut widths: Vec<usize> = headers.iter().map(|h| present::display_width(h)).collect();
     for row in rows {
         for (i, cell) in row.iter().enumerate() {
             if i < cols {
-                widths[i] = widths[i].max(cell.len());
+                widths[i] = widths[i].max(present::display_width(cell));
             }
         }
     }
@@ -91,7 +97,7 @@ pub fn table(headers: &[&str], rows: &[Vec<String>]) -> String {
     let header_line: Vec<String> = headers
         .iter()
         .enumerate()
-        .map(|(i, h)| pad(h, widths.get(i).copied().unwrap_or(h.len())))
+        .map(|(i, h)| present::pad_to(h, widths.get(i).copied().unwrap_or(0)))
         .collect();
     out.push_str(&header_line.join("  "));
     out.push('\n');
@@ -99,22 +105,12 @@ pub fn table(headers: &[&str], rows: &[Vec<String>]) -> String {
         let line: Vec<String> = row
             .iter()
             .enumerate()
-            .map(|(i, cell)| pad(cell, widths.get(i).copied().unwrap_or(cell.len())))
+            .map(|(i, cell)| present::pad_to(cell, widths.get(i).copied().unwrap_or(0)))
             .collect();
         out.push_str(&line.join("  "));
         out.push('\n');
     }
     out
-}
-
-fn pad(s: &str, width: usize) -> String {
-    if s.len() >= width {
-        s.to_string()
-    } else {
-        let mut out = s.to_string();
-        out.extend(core::iter::repeat(' ').take(width - s.len()));
-        out
-    }
 }
 
 /// The `net` dashboard: the composed summary (networking master switch, the
@@ -183,7 +179,16 @@ pub fn status(status: net::interface_connection_status::Reader<'_>) -> String {
         status.get_interface().map(|i| i.get_id()).unwrap_or(0)
     ));
     out.push_str(&format!("type:      {}\n", status.get_type().map(|t| t.to_str().unwrap_or("").to_string()).unwrap_or_default()));
-    out.push_str(&format!("connected: {}\n", status.get_connected()));
+    // The state glyph: one glyph per state, never a colour alone.
+    let connected = status.get_connected();
+    out.push_str(&format!(
+        "connected: {connected} {}\n",
+        if connected {
+            present::glyph::ACTIVE
+        } else {
+            present::glyph::UNKNOWN
+        }
+    ));
     if let Ok(host) = status.get_host_state() {
         out.push_str(&format!("hostState: {}\n", host.to_str().unwrap_or("")));
     }
