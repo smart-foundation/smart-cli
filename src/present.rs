@@ -44,6 +44,8 @@ pub enum Sgr {
     Red,
     /// The "this is information" colour.
     Cyan,
+    /// The "this is a second kind of thing" colour (the shell's own blue).
+    Blue,
     /// Emphasis.
     Bold,
     /// De-emphasis.
@@ -59,6 +61,7 @@ impl Sgr {
             Sgr::Green => "\u{1b}[32m",
             Sgr::Yellow => "\u{1b}[33m",
             Sgr::Cyan => "\u{1b}[36m",
+            Sgr::Blue => "\u{1b}[34m",
             Sgr::Bold => "\u{1b}[1m",
             Sgr::Dimmed => "\u{1b}[2m",
         }
@@ -66,6 +69,20 @@ impl Sgr {
 
     /// The sequence that ends a styled run.
     pub const RESET: &'static str = "\u{1b}[0m";
+
+    /// The ANSI SGR number this style paints with (0 = no style at all).
+    pub fn code(self) -> u8 {
+        match self {
+            Sgr::Plain => 0,
+            Sgr::Red => 31,
+            Sgr::Green => 32,
+            Sgr::Yellow => 33,
+            Sgr::Blue => 34,
+            Sgr::Cyan => 36,
+            Sgr::Bold => 1,
+            Sgr::Dimmed => 2,
+        }
+    }
 }
 
 /// How a cell is cut when it outgrows its column.
@@ -715,6 +732,7 @@ fn style_code(style: Sgr) -> u8 {
         Sgr::Yellow => 33,
         Sgr::Red => 31,
         Sgr::Cyan => 36,
+        Sgr::Blue => 34,
         Sgr::Bold => 1,
         Sgr::Dimmed => 2,
     }

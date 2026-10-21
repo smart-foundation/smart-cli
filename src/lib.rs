@@ -53,7 +53,13 @@ pub mod render; // dashboards/tables/bars over the SAME objects JSON emits
     feature = "cmd-tunnel",
     feature = "cmd-web",
     feature = "cmd-socket",
-    feature = "cmd-discovery"
+    feature = "cmd-discovery",
+    feature = "cmd-files",
+    feature = "cmd-process",
+    feature = "cmd-settings",
+    feature = "cmd-logging",
+    feature = "cmd-clock",
+    feature = "cmd-time"
 ))]
 pub mod profile; // the CLI-local state file (TOML subset; no contract route)
 // Shell completions are GENERATED from the registry table the help screen
@@ -65,7 +71,13 @@ pub mod profile; // the CLI-local state file (TOML subset; no contract route)
     feature = "cmd-tunnel",
     feature = "cmd-web",
     feature = "cmd-socket",
-    feature = "cmd-discovery"
+    feature = "cmd-discovery",
+    feature = "cmd-files",
+    feature = "cmd-process",
+    feature = "cmd-settings",
+    feature = "cmd-logging",
+    feature = "cmd-clock",
+    feature = "cmd-time"
 ))]
 pub mod completions;
 
@@ -90,7 +102,13 @@ pub mod service;
     feature = "cmd-tunnel",
     feature = "cmd-discovery",
     feature = "cmd-web",
-    feature = "cmd-socket"
+    feature = "cmd-socket",
+    feature = "cmd-files",
+    feature = "cmd-process",
+    feature = "cmd-settings",
+    feature = "cmd-logging",
+    feature = "cmd-clock",
+    feature = "cmd-time"
 ))]
 pub mod cmd;
 

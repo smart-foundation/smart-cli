@@ -22,7 +22,13 @@
     feature = "cmd-tunnel",
     feature = "cmd-web",
     feature = "cmd-socket",
-    feature = "cmd-discovery"
+    feature = "cmd-discovery",
+    feature = "cmd-files",
+    feature = "cmd-process",
+    feature = "cmd-settings",
+    feature = "cmd-logging",
+    feature = "cmd-clock",
+    feature = "cmd-time"
 ))]
 
 use alloc::string::{String, ToString};
@@ -79,7 +85,7 @@ pub fn corpus(availability: &Availability, service: Option<&registry::ServiceReg
             }
             tasks.push((
                 task.to_string(),
-                spec.verbs.iter().map(|v| v.to_string()).collect(),
+                spec.verbs.iter().map(|v| v.to_string()).collect::<Vec<String>>(),
                 spec.flags.iter().map(|f| f.to_string()).collect(),
             ));
         }
@@ -98,10 +104,16 @@ pub fn corpus(availability: &Availability, service: Option<&registry::ServiceReg
             // The task word is the LAST word of the path's family prefix (the
             // service's paths name the family too: "net wifi scan").
             let task = task.rsplit(' ').next().unwrap_or(task);
-            if tasks.iter().any(|(name, _, _)| name == task) {
+            // A task this build already has: the service's own verb joins the
+            // task's verbs (the service's surface is never half-cut — every
+            // path it publishes stays completable).
+            if let Some((_, verbs, _)) = tasks.iter_mut().find(|(name, _, _)| name == task) {
+                if !verbs.iter().any(|word| word == verb) {
+                    verbs.push(verb.to_string());
+                }
                 continue;
             }
-            tasks.push((task.to_string(), vec![verb.to_string()], Vec::new()));
+            tasks.push((task.to_string(), vec![verb.to_string()], Vec::<String>::new()));
         }
     }
     Corpus {

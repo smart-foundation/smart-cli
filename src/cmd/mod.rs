@@ -34,6 +34,28 @@ pub mod web;
 pub mod socket;
 #[cfg(feature = "cmd-discovery")]
 pub mod discovery;
+// The registry-driven dispatch the six contract-served families share.
+#[cfg(any(
+    feature = "cmd-files",
+    feature = "cmd-process",
+    feature = "cmd-settings",
+    feature = "cmd-logging",
+    feature = "cmd-clock",
+    feature = "cmd-time"
+))]
+pub mod domain;
+#[cfg(feature = "cmd-files")]
+pub mod files;
+#[cfg(feature = "cmd-process")]
+pub mod process;
+#[cfg(feature = "cmd-settings")]
+pub mod settings;
+#[cfg(feature = "cmd-logging")]
+pub mod logging;
+#[cfg(feature = "cmd-clock")]
+pub mod clock;
+#[cfg(feature = "cmd-time")]
+pub mod time;
 
 /// The CLI's own name, in the architecture-law sense (no "an implementation crate" here).
 pub const SHELL: &str = "net";
@@ -205,6 +227,37 @@ pub fn target(interface: &str, method: &str) -> Option<Target> {
     })
 }
 
+/// Resolve a call target by the SCHEMA STEM and the names the schema gives
+/// them — the explicit form, for a family whose interface name another schema
+/// could also declare. The ids still come from the GENERATED table.
+pub fn target_in(stem: &str, interface: &str, method: &str) -> Option<Target> {
+    let info = contract::interface_by_name(stem, interface)?;
+    let method_id = contract::method_id(info.stem, info.name, method)?;
+    Some(Target {
+        interface: info,
+        method_id,
+    })
+}
+
+/// Issue one call by NAME in a NAMED schema, without a renderer (the
+/// composers that need the bytes they just wrote).
+pub fn call_in(
+    app: &mut App,
+    stem: &str,
+    interface: &str,
+    method: &str,
+    params: &[u8],
+) -> Result<Vec<u8>, CallError> {
+    let target = target_in(stem, interface, method).ok_or_else(|| {
+        CallError::Transport(format!(
+            "the contract has no method `{stem}.{interface}.{method}` in this build"
+        ))
+    })?;
+    app.trace(&target, method);
+    app.conn
+        .call(target.interface.type_id, target.method_id, params)
+}
+
 /// Issue one call by NAME (the ids come from the GENERATED tables) and render
 /// its ok result (JSON or human), or emit the error and return its exit code.
 /// This is the single seam where "success only after ok" is enforced: the
@@ -227,6 +280,13 @@ pub fn go(app: &mut App, interface: &str, method: &str, params: &[u8], handler: 
 /// The interface id and the method id of one contract method (both GENERATED).
 pub fn ids(interface: &str, method: &str) -> Option<(u64, u16)> {
     let target = target(interface, method)?;
+    Some((target.interface.type_id, target.method_id))
+}
+
+/// The ids of one call in a NAMED schema — the explicit form, for a family
+/// whose interface name another schema could also declare.
+pub fn ids_in(stem: &str, interface: &str, method: &str) -> Option<(u64, u16)> {
+    let target = target_in(stem, interface, method)?;
     Some((target.interface.type_id, target.method_id))
 }
 
@@ -492,6 +552,34 @@ pub fn run(overrides: &ConnectOverrides) -> i32 {
         "discovery" => discovery::run(sub, &mut app),
         #[cfg(not(feature = "cmd-discovery"))]
         "discovery" => family_not_compiled(&flags, "discovery"),
+        // The six contract-served families (spine S1): the path and the
+        // summary come from the service's registry, the presenter is keyed by
+        // (schema id, method name). A verb this build has no presenter for
+        // runs through the generic path — the surface is never half-cut.
+        #[cfg(feature = "cmd-files")]
+        "files" => domain::dispatch("files", sub, &mut app, files::presenter),
+        #[cfg(not(feature = "cmd-files"))]
+        "files" => family_not_compiled(&flags, "files"),
+        #[cfg(feature = "cmd-process")]
+        "process" => domain::dispatch("process", sub, &mut app, process::presenter),
+        #[cfg(not(feature = "cmd-process"))]
+        "process" => family_not_compiled(&flags, "process"),
+        #[cfg(feature = "cmd-settings")]
+        "settings" => domain::dispatch("settings", sub, &mut app, settings::presenter),
+        #[cfg(not(feature = "cmd-settings"))]
+        "settings" => family_not_compiled(&flags, "settings"),
+        #[cfg(feature = "cmd-logging")]
+        "logging" => domain::dispatch("logging", sub, &mut app, logging::presenter),
+        #[cfg(not(feature = "cmd-logging"))]
+        "logging" => family_not_compiled(&flags, "logging"),
+        #[cfg(feature = "cmd-clock")]
+        "clock" => domain::dispatch("clock", sub, &mut app, clock::presenter),
+        #[cfg(not(feature = "cmd-clock"))]
+        "clock" => family_not_compiled(&flags, "clock"),
+        #[cfg(feature = "cmd-time")]
+        "time" => domain::dispatch("time", sub, &mut app, time::presenter),
+        #[cfg(not(feature = "cmd-time"))]
+        "time" => family_not_compiled(&flags, "time"),
         // The default: a net-family task (`wifi`, `interface`, `routes`,
         // `ping`, `proxy`, ...). This is how `net wifi on` works — the shell
         // is net, so an unrecognised family word is a net task.
@@ -525,6 +613,17 @@ pub fn run(overrides: &ConnectOverrides) -> i32 {
 /// refuses honestly (the CLI never invents a route).
 pub fn generic_command(app: &mut App, path: &str, args: &[String]) -> Option<i32> {
     let service = registry::fetch(app.conn())?;
+    generic_with(app, &service, path, args)
+}
+
+/// The generic path over an ALREADY-FETCHED registry: the same call, without
+/// the second registry read.
+pub fn generic_with(
+    app: &mut App,
+    service: &registry::ServiceRegistry,
+    path: &str,
+    args: &[String],
+) -> Option<i32> {
     let command = service.command(path)?.clone();
     let schema = command
         .metadata
@@ -865,6 +964,24 @@ pub fn compiled_families() -> Vec<&'static str> {
     }
     if cfg!(feature = "cmd-discovery") {
         families.push("discovery");
+    }
+    if cfg!(feature = "cmd-files") {
+        families.push("files");
+    }
+    if cfg!(feature = "cmd-process") {
+        families.push("process");
+    }
+    if cfg!(feature = "cmd-settings") {
+        families.push("settings");
+    }
+    if cfg!(feature = "cmd-logging") {
+        families.push("logging");
+    }
+    if cfg!(feature = "cmd-clock") {
+        families.push("clock");
+    }
+    if cfg!(feature = "cmd-time") {
+        families.push("time");
     }
     families.push("registry");
     families

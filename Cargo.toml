@@ -76,6 +76,15 @@ schema-tunnel = []
 schema-discovery = []
 schema-web = []
 schema-socket = []
+# The six families the engine serves over the same contract (spine S1):
+# files, process, settings, logging, clock, time. One .capnp per family —
+# the same shape as the families above.
+schema-files = []
+schema-process = []
+schema-settings = []
+schema-logging = []
+schema-clock = []
+schema-time = []
 
 # ─── command families (each implies its schema + std) ───────────
 cmd-net = ["schema-network", "std"]
@@ -85,6 +94,14 @@ cmd-tunnel = ["schema-tunnel", "std"]
 cmd-discovery = ["schema-discovery", "std"]
 cmd-web = ["schema-web", "std"]
 cmd-socket = ["schema-socket", "std"]
+# The six families the engine now serves (spine S1). Each is the same shape
+# as the ones above: the family's own schema + the host I/O.
+cmd-files = ["schema-files", "std"]
+cmd-process = ["schema-process", "std"]
+cmd-settings = ["schema-settings", "std"]
+cmd-logging = ["schema-logging", "std"]
+cmd-clock = ["schema-clock", "std"]
+cmd-time = ["schema-time", "std"]
 
 [dependencies]
 # The runtime half of the capnp triad (capnp 0.27.x — the canonical contract's

@@ -87,22 +87,22 @@ pub struct MockService {
 
 /// The service's configuration (the capability class + the shared state).
 #[derive(Clone)]
-struct Cfg {
-    control: bool,
-    unavailable: Vec<String>,
+pub struct Cfg {
+    pub control: bool,
+    pub unavailable: Vec<String>,
     /// The address this mock is reachable at (the carrier + the address), so
     /// the discovery service can publish the endpoint a client then dials.
-    carrier: String,
-    address: String,
+    pub carrier: String,
+    pub address: String,
     /// The CALL MODEL this mock publishes in discovery (the contract's own
     /// "capnp", unless a test wants to prove the refusal path).
-    call_model: String,
+    pub call_model: String,
     /// Answer the master-switch read with the contract's generic failure, so
     /// the exit-1 path (the call failed) is exercised against a real service
     /// double instead of a fabricated one.
-    fail_reads: bool,
+    pub fail_reads: bool,
     /// The shared state (call counts + written sets).
-    state: Arc<State>,
+    pub state: Arc<State>,
 }
 
 impl MockService {
@@ -470,6 +470,62 @@ fn bootstrap(cfg: Cfg) -> capnp::capability::Client {
             hook: client.into_client_hook(),
         });
     }
+    // The six families the engine now serves (spine S1): the same generated
+    // server traits, the same router, the same contract.
+    #[cfg(feature = "schema-files")]
+    {
+        let client: smart_cli::schema::files_capnp::files::Client =
+            capnp_rpc::new_client(crate::support::domains::FilesServer { cfg: cfg.clone() });
+        routes.push(Route {
+            interface_id: smart_cli::schema::files_capnp::files::Client::TYPE_ID,
+            hook: client.into_client_hook(),
+        });
+    }
+    #[cfg(feature = "schema-process")]
+    {
+        let client: smart_cli::schema::process_capnp::process::Client =
+            capnp_rpc::new_client(crate::support::domains::ProcessServer { cfg: cfg.clone() });
+        routes.push(Route {
+            interface_id: smart_cli::schema::process_capnp::process::Client::TYPE_ID,
+            hook: client.into_client_hook(),
+        });
+    }
+    #[cfg(feature = "schema-settings")]
+    {
+        let client: smart_cli::schema::settings_capnp::settings::Client =
+            capnp_rpc::new_client(crate::support::domains::SettingsServer { cfg: cfg.clone() });
+        routes.push(Route {
+            interface_id: smart_cli::schema::settings_capnp::settings::Client::TYPE_ID,
+            hook: client.into_client_hook(),
+        });
+    }
+    #[cfg(feature = "schema-logging")]
+    {
+        let client: smart_cli::schema::logging_capnp::logging::Client =
+            capnp_rpc::new_client(crate::support::domains::LoggingServer { cfg: cfg.clone() });
+        routes.push(Route {
+            interface_id: smart_cli::schema::logging_capnp::logging::Client::TYPE_ID,
+            hook: client.into_client_hook(),
+        });
+    }
+    #[cfg(feature = "schema-clock")]
+    {
+        let client: smart_cli::schema::clock_capnp::clock_service::Client =
+            capnp_rpc::new_client(crate::support::domains::ClockServer { cfg: cfg.clone() });
+        routes.push(Route {
+            interface_id: smart_cli::schema::clock_capnp::clock_service::Client::TYPE_ID,
+            hook: client.into_client_hook(),
+        });
+    }
+    #[cfg(feature = "schema-time")]
+    {
+        let client: smart_cli::schema::time_capnp::time::Client =
+            capnp_rpc::new_client(crate::support::domains::TimeServer { cfg: cfg.clone() });
+        routes.push(Route {
+            interface_id: smart_cli::schema::time_capnp::time::Client::TYPE_ID,
+            hook: client.into_client_hook(),
+        });
+    }
     capnp::capability::Client::new(Box::new(InterfaceRouter {
         routes: Rc::new(routes),
         broken: capnp_rpc::new_broken_cap(capnp::Error::unimplemented(
@@ -794,6 +850,235 @@ fn published_commands(_unavailable: &[String]) -> Vec<PublishedCommand> {
                 interface: "Network",
                 method,
                 domain: "network",
+                summary,
+            });
+        }
+    }
+    // The six families the engine now serves (spine S1): the paths the
+    // service publishes, the identity the CONTRACT gives them.
+    #[cfg(feature = "schema-files")]
+    {
+        let id = smart_cli::contract::schema_id("files").unwrap_or(0);
+        for (path, method, summary) in [
+            ("files ls", "listDirectory", "the directory's own entries"),
+            ("files find", "searchFiles", "the paths matching a glob"),
+            ("files tree", "walkTree", "the tree under a path"),
+            ("files stat", "statFile", "one path's own metadata"),
+            ("files xattrs", "getFileMetadata", "one path's extended metadata"),
+            ("files cat", "readFile", "one file's bytes"),
+            ("files write", "writeFile", "write bytes into a file"),
+            ("files du", "getDiskUsage", "the disk usage of the filesystem a path lives on"),
+            ("files locks", "getLocks", "the locks the host holds"),
+            ("files hash", "getFileHash", "one file's content hash"),
+            ("files versions", "getFileVersions", "one file's version trail"),
+            ("files branches", "listBranches", "one file's branches"),
+            ("files store", "storeContentAddressed", "store content by its address"),
+            ("files dedupe", "deduplicate", "deduplicate a path's content"),
+            ("files watch", "watchDirectory", "the directory's change events"),
+            ("files special", "getSpecialPath", "the host's own special path"),
+            ("files trash", "listTrash", "the host's own trash"),
+            ("files recents", "getRecentFiles", "the host's own recent files"),
+            ("files app", "getDefaultApp", "the default app for a type"),
+            ("files grep", "searchFileContent", "search a tree's content"),
+            ("files compare", "compareFiles", "compare two paths"),
+            ("files health", "getFilesystemHealth", "the filesystem's own health"),
+            ("files quota", "getQuota", "the quota on a path"),
+            ("files mkdir", "createDirectory", "create a directory"),
+            ("files touch", "touch", "touch a path"),
+            ("files rm", "removeFile", "remove a file"),
+            ("files mv", "renameFile", "rename a path"),
+            ("files cp", "copyFile", "copy a path"),
+            ("files link", "createSymlink", "create a symlink"),
+            ("files lock", "lockFile", "lock a file"),
+            ("files unlock", "unlockFile", "unlock a file"),
+            ("files exists", "fileExists", "does a path exist"),
+            ("files pwd", "getCurrentDirectory", "the host's working directory"),
+            ("files size", "getDirectorySize", "the size of a directory"),
+            ("files type", "getFileType", "one path's type"),
+            ("files checksum", "getFileChecksum", "one file's checksum"),
+            ("files open", "openFile", "open a file"),
+            ("files close", "closeFile", "close a file"),
+            ("files flush", "flushFile", "flush a file"),
+            ("files create", "createFile", "create a file"),
+            ("files rmdir", "removeDirectory", "remove a directory"),
+            ("files batch copy", "batchCopy", "copy several paths"),
+            ("files batch move", "batchMove", "move several paths"),
+            ("files batch delete", "batchDelete", "delete several paths"),
+            ("files quota set", "setQuota", "set the quota on a path"),
+            ("files trash restore", "restoreTrash", "restore a trashed entry"),
+            ("files trash empty", "emptyTrash", "empty the trash"),
+            ("files recents clear", "clearRecentFiles", "clear the recent files"),
+            ("files lifecycle", "getLifecycle", "one path's lifecycle policy"),
+            ("files lifecycle set", "setLifecycle", "set one path's lifecycle policy"),
+            ("files lifecycle apply", "applyLifecycle", "apply the lifecycle policy"),
+            ("files version restore", "restoreVersion", "restore one file's version"),
+            ("files compression set", "setCompression", "set one path's compression"),
+            ("files compression", "getCompression", "one path's compression"),
+            ("files decrypt", "decryptFile", "decrypt one file"),
+            ("files branch merge", "mergeBranch", "merge a branch"),
+            ("files snapshot", "createSnapshot", "snapshot a path"),
+            ("files acquire", "acquireFile", "acquire the file service"),
+        ] {
+            commands.push(PublishedCommand {
+                path,
+                schema_id: id,
+                interface: "Files",
+                method,
+                domain: "files",
+                summary,
+            });
+        }
+    }
+    #[cfg(feature = "schema-process")]
+    {
+        let id = smart_cli::contract::schema_id("process").unwrap_or(0);
+        for (path, method, summary) in [
+            ("process list", "listProcesses", "the kernel's own enumeration"),
+            ("process inspect", "getProcess", "one process's own reading"),
+            ("process status", "getProcessStatus", "one process's state and exit"),
+            ("process tree", "getProcessTree", "the tree under a pid"),
+            ("process threads", "getThreads", "one process's threads"),
+            ("process env", "getEnvironment", "one process's environment"),
+            ("process maps", "getMemoryMap", "one process's memory map"),
+            ("process limits", "getResourceLimits", "one process's declared quota"),
+            ("process accounting", "getAccounting", "one process's accounting"),
+            ("process groups", "listProcessGroups", "the kernel's own process groups"),
+            ("process stats", "getStats", "the aggregate over the enumeration"),
+            ("process context", "getExecutionContext", "one process's execution context"),
+            ("process attach", "attach", "attach to a process"),
+            ("process detach", "detach", "detach from a process"),
+            ("process set-env", "setEnvironment", "set a process's environment"),
+            ("process exit", "exitProcess", "ask a process to exit"),
+            ("process step", "stepProcess", "step a process"),
+            ("process continue", "continueProcess", "continue a process"),
+            ("process respawn", "respawnProcess", "respawn a process"),
+            ("process respawn-status", "getProcessRespawnStatus", "a process's respawn state"),
+            ("process read-memory", "readMemory", "read a process's memory"),
+            ("process write-memory", "writeMemory", "write a process's memory"),
+            ("process set-limit", "setResourceLimit", "set a process's resource limit"),
+            ("process set-context", "setExecutionContext", "set a process's execution context"),
+            ("process supervise", "registerSupervisor", "register a supervisor"),
+            ("process report-failure", "reportProcessFailure", "report a process's failure"),
+            ("process watch", "subscribeProcess", "a process's own snapshot stream"),
+            ("process watch-exit", "subscribeDeath", "a process's exit notification"),
+        ] {
+            commands.push(PublishedCommand {
+                path,
+                schema_id: id,
+                interface: "Process",
+                method,
+                domain: "process",
+                summary,
+            });
+        }
+    }
+    #[cfg(feature = "schema-settings")]
+    {
+        let id = smart_cli::contract::schema_id("settings").unwrap_or(0);
+        for (path, method, summary) in [
+            ("settings domains", "listDomains", "the schema source the host publishes"),
+            ("settings list", "getAll", "one domain's live values"),
+            ("settings get", "get", "one key's value"),
+            ("settings set", "set", "set one key's value"),
+            ("settings delete", "delete", "delete one key"),
+            ("settings clear", "clear", "clear one domain"),
+            ("settings version", "getVersion", "one key's version"),
+            ("settings history", "getHistory", "one key's change trail"),
+            ("settings diff", "getSettingsDiff", "the changes since a version"),
+            ("settings category", "listByCategory", "the keys under a category"),
+            ("settings bulk-get", "bulkGet", "read several keys at once"),
+            ("settings bulk-set", "bulkSet", "write several keys at once"),
+            ("settings set-app-override", "setAppOverride", "set an app's override"),
+            ("settings get-app-override", "getAppOverride", "read an app's override"),
+            ("settings clear-app-override", "clearAppOverride", "clear an app's override"),
+            ("settings set-if-unchanged", "setIfUnchanged", "set a key if its version holds"),
+            ("settings watch", "watch", "watch one key"),
+            ("settings watch-domain", "watchDomain", "watch one domain"),
+        ] {
+            commands.push(PublishedCommand {
+                path,
+                schema_id: id,
+                interface: "Settings",
+                method,
+                domain: "settings",
+                summary,
+            });
+        }
+    }
+    #[cfg(feature = "schema-logging")]
+    {
+        let id = smart_cli::contract::schema_id("logging").unwrap_or(0);
+        for (path, method, summary) in [
+            ("logging sinks", "listDomains", "the sinks this host has, and each one's level"),
+            ("logging domains", "listDomains", "the log domains this host serves"),
+            ("logging tail", "getEntries", "one domain's own lines"),
+            ("logging entries", "getEntries", "the retained lines"),
+            ("logging emit", "log", "write one line"),
+            ("logging level", "getLevel", "one domain's level"),
+            ("logging set-level", "setLevel", "set one domain's level"),
+            ("logging sampling", "setSamplingRate", "set one domain's sampling rate"),
+            ("logging clear", "clear", "clear one domain's lines"),
+            ("logging export", "export", "export the retained lines"),
+            ("logging follow", "subscribe", "the live log stream"),
+        ] {
+            commands.push(PublishedCommand {
+                path,
+                schema_id: id,
+                interface: "Logging",
+                method,
+                domain: "logging",
+                summary,
+            });
+        }
+    }
+    #[cfg(feature = "schema-clock")]
+    {
+        let id = smart_cli::contract::schema_id("clock").unwrap_or(0);
+        for (path, method, summary) in [
+            ("clock info", "info", "the measured state of this host's clocks"),
+            ("clock now", "realtimeNow", "the host's own CLOCK_REALTIME"),
+            ("clock monotonic", "monotonicNow", "the host's own CLOCK_MONOTONIC"),
+            ("clock uptime", "info", "how long the host has been up"),
+            ("clock resolution", "listClockDomains", "each clock domain's resolution"),
+            ("clock sync", "getClockSync", "the measured sync verdict"),
+            ("clock security", "info", "the clock's own security state"),
+            ("clock domains", "listClockDomains", "the clock domains this host serves"),
+            ("clock quality", "getClockQuality", "the measured quality"),
+            ("clock drift", "getClockDrift", "the measured drift"),
+            ("clock timers", "listPersistedTimers", "the store's own persisted timers"),
+            ("clock sleep", "sleep", "sleep on the caller's own thread"),
+            ("clock sleep-cancellable", "sleepCancellable", "a cancellable sleep"),
+            ("clock persist-timer", "persistTimer", "persist a timer"),
+            ("clock set-timer-dependency", "setTimerDependency", "tie one timer to another"),
+            ("clock alarms", "alarms", "acquire the alarm service"),
+            ("clock watch", "subscribeTimers", "the timer event stream"),
+        ] {
+            commands.push(PublishedCommand {
+                path,
+                schema_id: id,
+                interface: "ClockService",
+                method,
+                domain: "clock",
+                summary,
+            });
+        }
+    }
+    #[cfg(feature = "schema-time")]
+    {
+        let id = smart_cli::contract::schema_id("time").unwrap_or(0);
+        for (path, method, summary) in [
+            ("time now", "getDateTime", "the host's own wall clock"),
+            ("time cal", "convertCalendar", "the arithmetic calendars"),
+            ("time add", "addCalendarUnits", "add units to a date"),
+            ("time sub", "subtractCalendarUnits", "subtract units from a date"),
+            ("time diff", "diffCalendarDates", "the difference between two dates"),
+        ] {
+            commands.push(PublishedCommand {
+                path,
+                schema_id: id,
+                interface: "Time",
+                method,
+                domain: "time",
                 summary,
             });
         }

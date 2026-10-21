@@ -34,7 +34,7 @@ pub fn run(sub: &[String], app: &mut App) -> i32 {
     let rest = &sub[1..];
     match task {
         "status" | "state" => go(
-            app, "Bluetooth", "getState", 0, &msg(|m| { m.init_root::<wire::get_state_params::Builder<'_>>(); }),
+            app, "BluetoothService", "getState", &msg(|m| { m.init_root::<wire::get_state_params::Builder<'_>>(); }),
             Handler { json: |b, o| bt_state(b, o), human: |b| bt_state_human(b) },
         ),
         "on" | "enable" => go(app, "BluetoothService", "enable", &msg(|m| { m.init_root::<wire::enable_params::Builder<'_>>(); }), super::VOID),

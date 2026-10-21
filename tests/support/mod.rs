@@ -5,6 +5,10 @@
 
 #[allow(dead_code)]
 pub mod mock;
+/// The six contract-served families (spine S1), as a mock service: the same
+/// generated `Server` traits, implemented from the schema alone.
+#[allow(dead_code, unused_imports)]
+pub mod domains;
 /// The headless scenario is network-schema shaped; a build without
 /// `schema-network` (the cmd-dns isolation config) does not compile it.
 #[cfg(feature = "schema-network")]
