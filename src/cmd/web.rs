@@ -6,7 +6,7 @@
 use alloc::string::{String, ToString};
 
 use crate::json;
-use crate::schema::web_capnp::{self as web, web_service as wire};
+use smart_protocol::schema::web_capnp::{self as web, web_service as wire};
 use crate::transport as tp;
 
 use super::{go, App, Handler};
@@ -71,7 +71,7 @@ pub fn run(sub: &[String], app: &mut App) -> i32 {
 fn web_fetch(bytes: &[u8], out: &mut String) {
     let body = tp::with_root::<wire::fetch_results::Owned, _, _>(bytes, |r| {
         let s = match r.get_result().ok().and_then(|res| match res.which() {
-            Ok(crate::schema::web_capnp::http_fetch_result::Which::Response(Ok(resp))) => {
+            Ok(smart_protocol::schema::web_capnp::http_fetch_result::Which::Response(Ok(resp))) => {
                 Some(resp.get_status())
             }
             _ => None,
@@ -95,7 +95,7 @@ fn web_fetch(bytes: &[u8], out: &mut String) {
 fn web_fetch_human(bytes: &[u8]) -> String {
     let status = tp::with_root::<wire::fetch_results::Owned, _, _>(bytes, |r| {
         r.get_result().ok().and_then(|res| match res.which() {
-            Ok(crate::schema::web_capnp::http_fetch_result::Which::Response(Ok(resp))) => Some(resp.get_status()),
+            Ok(smart_protocol::schema::web_capnp::http_fetch_result::Which::Response(Ok(resp))) => Some(resp.get_status()),
             _ => None,
         })
     })

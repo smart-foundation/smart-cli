@@ -83,7 +83,7 @@ pub fn dispatch(family: &str, sub: &[String], app: &mut App, lookup: Lookup) -> 
             let mut out = String::new();
             crate::json::write_error(
                 &mut out,
-                crate::schema::types_capnp::ErrorCode::Unavailable,
+                smart_protocol::schema::types_capnp::ErrorCode::Unavailable,
                 &reason.line(),
             );
             println!("{out}");

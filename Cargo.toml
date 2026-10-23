@@ -97,33 +97,38 @@ schema-vcard = []
 schema-content = []
 
 # ─── command families (each implies its schema + std) ───────────
-cmd-net = ["schema-network", "std"]
-cmd-dns = ["schema-dns", "std"]
-cmd-bt = ["schema-bluetooth", "std"]
-cmd-tunnel = ["schema-tunnel", "std"]
-cmd-discovery = ["schema-discovery", "std"]
-cmd-web = ["schema-web", "std"]
-cmd-socket = ["schema-socket", "std"]
-# The six families the engine now serves (spine S1). Each is the same shape
-# as the ones above: the family's own schema + the host I/O.
-cmd-files = ["schema-files", "std"]
-cmd-process = ["schema-process", "std"]
-cmd-settings = ["schema-settings", "std"]
-cmd-logging = ["schema-logging", "std"]
-cmd-clock = ["schema-clock", "std"]
-cmd-time = ["schema-time", "std"]
-cmd-clipboard = ["schema-clipboard", "std"]
-cmd-audio = ["schema-audio", "std"]
-cmd-media = ["schema-media", "std"]
-cmd-power = ["schema-power", "std"]
-cmd-database = ["schema-database", "std"]
-cmd-queue = ["schema-queue", "std"]
-cmd-appindex = ["schema-appindex", "std"]
-cmd-manifest = ["schema-manifest", "std"]
-cmd-vcard = ["schema-vcard", "std"]
-cmd-content = ["schema-content", "std"]
+# Each `cmd-*` feature turns on the matching `schema-*` feature in
+# smart-protocol-rs (which drives its build.rs codegen) plus the `std` host I/O.
+# The six families the engine now serves (spine S1) are the same shape.
+cmd-net = ["smart-protocol/schema-network", "std"]
+cmd-dns = ["smart-protocol/schema-dns", "std"]
+cmd-bt = ["smart-protocol/schema-bluetooth", "std"]
+cmd-tunnel = ["smart-protocol/schema-tunnel", "std"]
+cmd-discovery = ["smart-protocol/schema-discovery", "std"]
+cmd-web = ["smart-protocol/schema-web", "std"]
+cmd-socket = ["smart-protocol/schema-socket", "std"]
+cmd-files = ["smart-protocol/schema-files", "std"]
+cmd-process = ["smart-protocol/schema-process", "std"]
+cmd-settings = ["smart-protocol/schema-settings", "std"]
+cmd-logging = ["smart-protocol/schema-logging", "std"]
+cmd-clock = ["smart-protocol/schema-clock", "std"]
+cmd-time = ["smart-protocol/schema-time", "std"]
+cmd-clipboard = ["smart-protocol/schema-clipboard", "std"]
+cmd-audio = ["smart-protocol/schema-audio", "std"]
+cmd-media = ["smart-protocol/schema-media", "std"]
+cmd-power = ["smart-protocol/schema-power", "std"]
+cmd-database = ["smart-protocol/schema-database", "std"]
+cmd-queue = ["smart-protocol/schema-queue", "std"]
+cmd-appindex = ["smart-protocol/schema-appindex", "std"]
+cmd-manifest = ["smart-protocol/schema-manifest", "std"]
+cmd-vcard = ["smart-protocol/schema-vcard", "std"]
+cmd-content = ["smart-protocol/schema-content", "std"]
 
 [dependencies]
+# The contract: generated capnp bindings (schema + contract lookups) from
+# smart-protocol-rs, which owns the build.rs codegen. smart-cli no longer has
+# its own build.rs.
+smart-protocol = { path = "../smart-protocol-rs" }
 # The runtime half of the capnp triad (capnp 0.27.x — the canonical contract's
 # line). `default-features = false` + `alloc` keeps capnp itself no_std + alloc
 # (law #1); `std` above widens it.
@@ -135,11 +140,7 @@ capnp-rpc = { version = "0.27.0", optional = true }
 # capnp-rpc; named here because the client drives it directly).
 futures = { version = "0.3", features = ["executor"], optional = true }
 
-[build-dependencies]
-# The codegen half of the triad (capnpc 0.27.0 — the pure-Rust schema compiler
-# that drives the system `capnp` binary, 1.4.0 on this box).
-capnpc = "0.27.0"
-
-# NOTE (the architecture law): there is no an implementation crate anywhere below — not a
-# dependency, not a build-dependency, not a patch. `cargo tree` in this tree
-# names capnp/capnpc/smart-cli only; the Cargo.lock has no an implementation crate entry.
+# NOTE (the architecture law): the only implementation-adjacent crate in the
+# graph is smart-protocol-rs (the contract's generated bindings), declared
+# above as a normal dependency. `cargo tree` names smart-protocol-rs plus the
+# capnp runtime; there is no separate implementation crate.

@@ -11,8 +11,8 @@ use alloc::string::{String, ToString};
 use crate::present;
 use alloc::vec::Vec;
 
-#[cfg(feature = "schema-network")]
-use crate::schema::network_capnp as net;
+#[cfg(feature = "cmd-net")]
+use smart_protocol::schema::network_capnp as net;
 
 /// The colour/decoration policy for one invocation.
 #[derive(Clone, Copy, Debug)]
@@ -115,7 +115,7 @@ pub fn table(headers: &[&str], rows: &[Vec<String>]) -> String {
 
 /// The `net` dashboard: the composed summary (networking master switch, the
 /// radios, the interfaces). It reads the very objects JSON emits.
-#[cfg(feature = "schema-network")]
+#[cfg(feature = "cmd-net")]
 pub fn summary(
     style: &Style,
     networking_enabled: bool,
@@ -150,7 +150,7 @@ pub fn summary(
 }
 
 /// Build the interface rows table from the `getInterfaces` result.
-#[cfg(feature = "schema-network")]
+#[cfg(feature = "cmd-net")]
 fn interface_rows(interfaces: net::network::get_interfaces_results::Reader<'_>) -> String {
     let mut rows = Vec::new();
     for it in interfaces.get_interfaces().into_iter().flatten() {
@@ -171,7 +171,7 @@ fn interface_rows(interfaces: net::network::get_interfaces_results::Reader<'_>) 
 
 /// The `net interface <name>` detail view (the `getStatus` result + a strength
 /// bar for wifi).
-#[cfg(feature = "schema-network")]
+#[cfg(feature = "cmd-net")]
 pub fn status(status: net::interface_connection_status::Reader<'_>) -> String {
     let mut out = String::new();
     out.push_str(&format!(
@@ -207,7 +207,7 @@ pub fn status(status: net::interface_connection_status::Reader<'_>) -> String {
 }
 
 /// The `net wifi list` table (the `listKnownWifiNetworks` result).
-#[cfg(feature = "schema-network")]
+#[cfg(feature = "cmd-net")]
 pub fn wifi_list(results: net::network::list_known_wifi_networks_results::Reader<'_>) -> String {
     let mut rows = Vec::new();
     for n in results.get_networks().into_iter().flatten() {
@@ -221,7 +221,7 @@ pub fn wifi_list(results: net::network::list_known_wifi_networks_results::Reader
 }
 
 /// The `net routes` table.
-#[cfg(feature = "schema-network")]
+#[cfg(feature = "cmd-net")]
 pub fn routes(results: net::network::get_routes_results::Reader<'_>) -> String {
     let mut rows = Vec::new();
     for r in results.get_routes().into_iter().flatten() {
@@ -235,7 +235,7 @@ pub fn routes(results: net::network::get_routes_results::Reader<'_>) -> String {
 }
 
 /// The counters view (bytes in/out with a bar).
-#[cfg(feature = "schema-network")]
+#[cfg(feature = "cmd-net")]
 pub fn counters(counters: net::interface_counters::Reader<'_>) -> String {
     let mut out = String::new();
     out.push_str(&format!("bytes in:  {}\n", counters.get_bytes_in()));
@@ -246,7 +246,7 @@ pub fn counters(counters: net::interface_counters::Reader<'_>) -> String {
 }
 
 /// The radios table (from `listRadioStates`).
-#[cfg(feature = "schema-network")]
+#[cfg(feature = "cmd-net")]
 pub fn radios(results: net::network::list_radio_states_results::Reader<'_>) -> String {
     let mut rows = Vec::new();
     for r in results.get_radios().into_iter().flatten() {

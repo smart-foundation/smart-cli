@@ -26,8 +26,8 @@ use alloc::vec::Vec;
 
 use crate::json;
 use crate::present;
-use crate::schema::time_capnp as wire;
-use crate::schema::time_capnp::{CalendarSystem, CalendarUnitKind};
+use smart_protocol::schema::time_capnp as wire;
+use smart_protocol::schema::time_capnp::{CalendarSystem, CalendarUnitKind};
 use crate::transport as tp;
 
 use super::domain::{self, Presenter};
@@ -42,7 +42,7 @@ const INTERFACE: &str = "Time";
 /// contract's own identity for the call, which is what the service's registry
 /// publishes.
 pub fn presenter(schema_id: u64, method: &str) -> Option<Presenter> {
-    if schema_id != crate::contract::schema_id(STEM)? {
+    if schema_id != smart_protocol::contract::schema_id(STEM)? {
         return None;
     }
     Some(match method {
@@ -634,7 +634,7 @@ fn verify_hsm(app: &mut App, args: &[String], _path: &str) -> i32 {
                 );
             };
             match result.which() {
-                Ok(crate::schema::types_capnp::bool_result::Which::Ok(ok)) => {
+                Ok(smart_protocol::schema::types_capnp::bool_result::Which::Ok(ok)) => {
                     (
                         format!("{{\"result\":{{\"ok\":{ok}}}}}"),
                         format!(
@@ -648,7 +648,7 @@ fn verify_hsm(app: &mut App, args: &[String], _path: &str) -> i32 {
                         ),
                     )
                 }
-                Ok(crate::schema::types_capnp::bool_result::Which::Error(error)) => {
+                Ok(smart_protocol::schema::types_capnp::bool_result::Which::Error(error)) => {
                     let error = error.map(|e| e.get_message().map(|m| m.to_str().unwrap_or("")).unwrap_or_default().to_string()).unwrap_or_default();
                     (
                         format!("{{\"result\":{{\"error\":{}}}}}", {

@@ -178,8 +178,16 @@ version = "0.1.0"
 dependencies = [
  "capnp",
  "capnp-rpc",
- "capnpc",
  "futures",
+ "smart-protocol",
+]
+
+[[package]]
+name = "smart-protocol"
+version = "0.1.0"
+dependencies = [
+ "capnp",
+ "capnpc",
 ]
 
 [[package]]

@@ -5,7 +5,7 @@
 use alloc::string::{String, ToString};
 
 use crate::json;
-use crate::schema::discovery_capnp::discovery as wire;
+use smart_protocol::schema::discovery_capnp::discovery as wire;
 use crate::transport as tp;
 
 use super::{go, App, Handler};

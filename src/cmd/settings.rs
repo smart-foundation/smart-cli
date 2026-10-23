@@ -39,7 +39,7 @@ use alloc::vec::Vec;
 
 use crate::json;
 use crate::present;
-use crate::schema::settings_capnp as wire;
+use smart_protocol::schema::settings_capnp as wire;
 use crate::transport as tp;
 
 use super::domain::{self, Presenter};
@@ -52,7 +52,7 @@ const INTERFACE: &str = "Settings";
 
 /// The family's presenter lookup: keyed by **(schema id, method name)**.
 pub fn presenter(schema_id: u64, method: &str) -> Option<Presenter> {
-    if schema_id != crate::contract::schema_id(STEM)? {
+    if schema_id != smart_protocol::contract::schema_id(STEM)? {
         return None;
     }
     Some(match method {
@@ -851,7 +851,7 @@ fn pull_changes(
     subscription: &crate::transport::Subscription,
     max: u32,
 ) -> Result<Vec<u8>, crate::transport::CallError> {
-    let info = crate::contract::interface_by_name("settings", "SettingsSubscription").ok_or_else(
+    let info = smart_protocol::contract::interface_by_name("settings", "SettingsSubscription").ok_or_else(
         || {
             crate::transport::CallError::Transport(
                 "the contract interface `SettingsSubscription` is not compiled into this build"
@@ -860,7 +860,7 @@ fn pull_changes(
         },
     )?;
     let method_id =
-        crate::contract::method_id("settings", "SettingsSubscription", "pull").ok_or_else(|| {
+        smart_protocol::contract::method_id("settings", "SettingsSubscription", "pull").ok_or_else(|| {
             crate::transport::CallError::Transport(
                 "the contract interface `SettingsSubscription` has no `pull` method in this build"
                     .to_string(),
@@ -1050,9 +1050,9 @@ fn void_verb(app: &mut App, method: &str, verb: &str, target: &str, params: &[u8
         Err(error) => return super::emit_error(app, &error),
     };
     let Some((json_text, human_text)) =
-        tp::with_root::<crate::schema::types_capnp::void_result::Owned, _, _>(&bytes, |r| {
+        tp::with_root::<smart_protocol::schema::types_capnp::void_result::Owned, _, _>(&bytes, |r| {
             match r.which() {
-                Ok(crate::schema::types_capnp::void_result::Which::Success(_)) => (
+                Ok(smart_protocol::schema::types_capnp::void_result::Which::Success(_)) => (
                     format!("{{\"verb\":\"{verb}\",\"target\":\"{target}\",\"changed\":true}}"),
                     format!(
                         "  {} {} {} {}",
@@ -1062,7 +1062,7 @@ fn void_verb(app: &mut App, method: &str, verb: &str, target: &str, params: &[u8
                         domain::dim(app, "— the engine's own host-mutating path, accepted")
                     ),
                 ),
-                Ok(crate::schema::types_capnp::void_result::Which::Error(error)) => {
+                Ok(smart_protocol::schema::types_capnp::void_result::Which::Error(error)) => {
                     let reason = error.map(|e| text(e.get_message())).unwrap_or_default();
                     (
                         format!("{{\"verb\":\"{verb}\",\"error\":\"{reason}\"}}"),
@@ -1120,7 +1120,7 @@ fn value_word(value: &capnp::Result<wire::setting_value::Reader<'_>>) -> String 
         Ok(wire::setting_value::Which::Boolean(flag)) => flag.to_string(),
         Ok(wire::setting_value::Which::Data(handle)) => match handle {
             Ok(handle) => match handle.which() {
-                Ok(crate::schema::types_capnp::data_handle::Which::Inline(data)) => {
+                Ok(smart_protocol::schema::types_capnp::data_handle::Which::Inline(data)) => {
                     let bytes = data.map(|d| d.len()).unwrap_or(0);
                     format!("◉ a data handle ({bytes} byte(s))")
                 }

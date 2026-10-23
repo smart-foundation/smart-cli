@@ -10,7 +10,7 @@ const STEM: &str = "audio";
 const INTERFACE: &str = "Audio";
 
 pub fn presenter(schema_id: u64, method: &str) -> Option<Presenter> {
-    if schema_id != crate::contract::schema_id(STEM)? {
+    if schema_id != smart_protocol::contract::schema_id(STEM)? {
         return None;
     }
     // Generic fallback handles every published method against a service

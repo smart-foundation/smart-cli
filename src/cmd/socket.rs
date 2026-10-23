@@ -5,7 +5,7 @@
 use alloc::string::{String, ToString};
 
 use crate::json;
-use crate::schema::socket_capnp::socket_service as wire;
+use smart_protocol::schema::socket_capnp::socket_service as wire;
 use crate::transport as tp;
 
 use super::{go, App, Handler};

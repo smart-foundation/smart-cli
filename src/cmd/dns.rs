@@ -7,7 +7,7 @@ use alloc::vec::Vec;
 
 use crate::json;
 use crate::render;
-use crate::schema::dns_capnp::{dns_service as wire};
+use smart_protocol::schema::dns_capnp::{dns_service as wire};
 use crate::transport as tp;
 
 use super::{go, App, Handler};
@@ -101,7 +101,7 @@ fn dns_resolve(bytes: &[u8], out: &mut String) {
 fn resolve_answer_body(r: wire::resolve_results::Reader<'_>) -> Option<String> {
     let res = r.get_result().ok()?;
     let answer = match res.which() {
-        Ok(crate::schema::dns_capnp::resolve_result::Which::Answer(Ok(a))) => a,
+        Ok(smart_protocol::schema::dns_capnp::resolve_result::Which::Answer(Ok(a))) => a,
         _ => return None,
     };
     let mut records = String::from("[");
@@ -128,7 +128,7 @@ fn dns_resolve_human(bytes: &[u8]) -> String {
     tp::with_root::<wire::resolve_results::Owned, _, _>(bytes, |r| {
         let res = r.get_result().ok();
         let answer = res.and_then(|res| match res.which() {
-            Ok(crate::schema::dns_capnp::resolve_result::Which::Answer(Ok(a))) => Some(a),
+            Ok(smart_protocol::schema::dns_capnp::resolve_result::Which::Answer(Ok(a))) => Some(a),
             _ => None,
         });
         match answer {
@@ -156,7 +156,7 @@ fn dns_reverse(bytes: &[u8], out: &mut String) {
 }
 fn reverse_name(r: wire::reverse_resolve_results::Reader<'_>) -> String {
     match r.get_result().ok().and_then(|res| match res.which() {
-        Ok(crate::schema::dns_capnp::reverse_resolve_result::Which::Name(Ok(t))) => Some(t.to_str().unwrap_or("").to_string()),
+        Ok(smart_protocol::schema::dns_capnp::reverse_resolve_result::Which::Name(Ok(t))) => Some(t.to_str().unwrap_or("").to_string()),
         _ => None,
     }) {
         Some(n) => n,

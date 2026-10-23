@@ -14,8 +14,8 @@ use std::io::Write;
 
 use crate::json;
 use crate::render;
-use crate::schema::network_capnp::network as wire;
-use crate::schema::{network_capnp as net, types_capnp};
+use smart_protocol::schema::network_capnp::network as wire;
+use smart_protocol::schema::{network_capnp as net, types_capnp};
 use crate::transport as tp;
 use crate::selector::{self};
 use crate::watch;
@@ -2159,7 +2159,7 @@ fn applied_failure(app: &App, applied: &[&str], error: crate::transport::CallErr
         if let crate::transport::CallError::Service(service) = &error {
             json::error_object(&mut out, service.code, &service.message);
         } else {
-            json::write_error(&mut out, crate::schema::types_capnp::ErrorCode::Failed, &error.to_string());
+            json::write_error(&mut out, smart_protocol::schema::types_capnp::ErrorCode::Failed, &error.to_string());
         }
         out.push_str(",\"applied\":[");
         for (i, step) in applied.iter().enumerate() {

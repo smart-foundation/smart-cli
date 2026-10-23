@@ -28,8 +28,8 @@ use alloc::vec::Vec;
 
 use crate::json;
 use crate::present;
-use crate::schema::clock_capnp as wire;
-use crate::schema::clock_capnp::ClockDomain;
+use smart_protocol::schema::clock_capnp as wire;
+use smart_protocol::schema::clock_capnp::ClockDomain;
 use crate::transport as tp;
 
 use super::domain::{self, Presenter};
@@ -42,7 +42,7 @@ const INTERFACE: &str = "ClockService";
 
 /// The family's presenter lookup: keyed by **(schema id, method name)**.
 pub fn presenter(schema_id: u64, method: &str) -> Option<Presenter> {
-    if schema_id != crate::contract::schema_id(STEM)? {
+    if schema_id != smart_protocol::contract::schema_id(STEM)? {
         return None;
     }
     Some(match method {
@@ -816,10 +816,10 @@ fn sleep(app: &mut App, args: &[String], _path: &str) -> i32 {
         Err(error) => return super::emit_error(app, &error),
     };
     let Some((json_text, human_text)) =
-        tp::with_root::<crate::schema::types_capnp::void_result::Owned, _, _>(&bytes, |r| {
+        tp::with_root::<smart_protocol::schema::types_capnp::void_result::Owned, _, _>(&bytes, |r| {
             let ok = matches!(
                 r.which(),
-                Ok(crate::schema::types_capnp::void_result::Which::Success(_))
+                Ok(smart_protocol::schema::types_capnp::void_result::Which::Success(_))
             );
             (
                 format!("{{\"slept\":{millis},\"accepted\":{ok}}}"),
@@ -1056,13 +1056,13 @@ fn timer_cancel(app: &mut App, args: &[String], _path: &str) -> i32 {
         Err(error) => return super::emit_error(app, &error),
     };
     let Some((json_text, human_text)) = tp::with_root::<
-        crate::schema::types_capnp::void_result::Owned,
+        smart_protocol::schema::types_capnp::void_result::Owned,
         _,
         _,
     >(&bytes, |r| {
         let ok = matches!(
             r.which(),
-            Ok(crate::schema::types_capnp::void_result::Which::Success(_))
+            Ok(smart_protocol::schema::types_capnp::void_result::Which::Success(_))
         );
         (
             format!("{{\"cancelled\":{ok},\"id\":{id}}}"),
@@ -1353,12 +1353,12 @@ fn pull_timer_events(
     subscription: &crate::transport::Subscription,
     max: u32,
 ) -> Result<Vec<u8>, crate::transport::CallError> {
-    let info = crate::contract::interface_by_name("clock", "TimerSubscription").ok_or_else(|| {
+    let info = smart_protocol::contract::interface_by_name("clock", "TimerSubscription").ok_or_else(|| {
         crate::transport::CallError::Transport(
             "the contract interface `TimerSubscription` is not compiled into this build".to_string(),
         )
     })?;
-    let method_id = crate::contract::method_id("clock", "TimerSubscription", "pull").ok_or_else(|| {
+    let method_id = smart_protocol::contract::method_id("clock", "TimerSubscription", "pull").ok_or_else(|| {
         crate::transport::CallError::Transport(
             "the contract interface `TimerSubscription` has no `pull` method in this build"
                 .to_string(),
@@ -1459,12 +1459,12 @@ fn alarm_call(
     let capability = results
         .get_service()
         .map_err(|e| crate::transport::CallError::Transport(format!("{e}")))?;
-    let info = crate::contract::interface_by_name("clock", "AlarmService").ok_or_else(|| {
+    let info = smart_protocol::contract::interface_by_name("clock", "AlarmService").ok_or_else(|| {
         crate::transport::CallError::Transport(
             "the contract interface `AlarmService` is not compiled into this build".to_string(),
         )
     })?;
-    let alarm_method = crate::contract::method_id("clock", "AlarmService", method).ok_or_else(|| {
+    let alarm_method = smart_protocol::contract::method_id("clock", "AlarmService", method).ok_or_else(|| {
         crate::transport::CallError::Transport(format!(
             "the contract interface `AlarmService` has no `{method}` method in this build"
         ))
@@ -1706,9 +1706,9 @@ fn alarm_write(app: &mut App, method: &str, verb: &str, target: &str, params: &[
         Err(error) => return super::emit_error(app, &error),
     };
     let Some((json_text, human_text)) =
-        tp::with_root::<crate::schema::types_capnp::void_result::Owned, _, _>(&bytes, |r| {
+        tp::with_root::<smart_protocol::schema::types_capnp::void_result::Owned, _, _>(&bytes, |r| {
             match r.which() {
-                Ok(crate::schema::types_capnp::void_result::Which::Success(_)) => (
+                Ok(smart_protocol::schema::types_capnp::void_result::Which::Success(_)) => (
                     format!("{{\"verb\":\"{verb}\",\"target\":\"{target}\",\"changed\":true}}"),
                     format!(
                         "  {} {} {} {}",
@@ -1718,7 +1718,7 @@ fn alarm_write(app: &mut App, method: &str, verb: &str, target: &str, params: &[
                         domain::dim(app, "— the engine's own host-mutating path, accepted")
                     ),
                 ),
-                Ok(crate::schema::types_capnp::void_result::Which::Error(error)) => {
+                Ok(smart_protocol::schema::types_capnp::void_result::Which::Error(error)) => {
                     let reason = error.map(|e| text(e.get_message())).unwrap_or_default();
                     (
                         format!("{{\"verb\":\"{verb}\",\"error\":\"{reason}\"}}"),
@@ -1860,9 +1860,9 @@ fn virtual_advance(app: &mut App, args: &[String], _path: &str) -> i32 {
 /// A `T.VoidResult` answer, in the shell's own "✎ verb target" line.
 fn void_verb(app: &mut App, _method: &str, verb: &str, target: &str, bytes: &[u8]) -> i32 {
     let Some((json_text, human_text)) =
-        tp::with_root::<crate::schema::types_capnp::void_result::Owned, _, _>(bytes, |r| {
+        tp::with_root::<smart_protocol::schema::types_capnp::void_result::Owned, _, _>(bytes, |r| {
             match r.which() {
-                Ok(crate::schema::types_capnp::void_result::Which::Success(_)) => (
+                Ok(smart_protocol::schema::types_capnp::void_result::Which::Success(_)) => (
                     format!("{{\"verb\":\"{verb}\",\"target\":\"{target}\",\"changed\":true}}"),
                     format!(
                         "  {} {} {} {}",
@@ -1872,7 +1872,7 @@ fn void_verb(app: &mut App, _method: &str, verb: &str, target: &str, bytes: &[u8
                         domain::dim(app, "— the engine's own host-mutating path, accepted")
                     ),
                 ),
-                Ok(crate::schema::types_capnp::void_result::Which::Error(error)) => {
+                Ok(smart_protocol::schema::types_capnp::void_result::Which::Error(error)) => {
                     let reason = error.map(|e| text(e.get_message())).unwrap_or_default();
                     (
                         format!("{{\"verb\":\"{verb}\",\"error\":\"{reason}\"}}"),
@@ -1905,7 +1905,7 @@ fn void_verb(app: &mut App, _method: &str, verb: &str, target: &str, bytes: &[u8
 }
 
 /// A timestamp, as the contract-shaped JSON.
-fn timestamp(out: &mut String, stamp: &capnp::Result<crate::schema::types_capnp::timestamp::Reader<'_>>) {
+fn timestamp(out: &mut String, stamp: &capnp::Result<smart_protocol::schema::types_capnp::timestamp::Reader<'_>>) {
     let mut o = json::Obj::new(out);
     o.key("nanoseconds")
         .int(stamp.as_ref().map(|s| s.get_nanoseconds()).unwrap_or(0));
@@ -1913,7 +1913,7 @@ fn timestamp(out: &mut String, stamp: &capnp::Result<crate::schema::types_capnp:
 }
 
 /// A duration, as the contract-shaped JSON.
-fn duration(out: &mut String, value: &capnp::Result<crate::schema::types_capnp::duration::Reader<'_>>) {
+fn duration(out: &mut String, value: &capnp::Result<smart_protocol::schema::types_capnp::duration::Reader<'_>>) {
     let mut o = json::Obj::new(out);
     o.key("nanoseconds")
         .int(value.as_ref().map(|d| d.get_nanoseconds()).unwrap_or(0));
@@ -1921,12 +1921,12 @@ fn duration(out: &mut String, value: &capnp::Result<crate::schema::types_capnp::
 }
 
 /// A timestamp reader, as its nanoseconds.
-fn nanos(stamp: &capnp::Result<crate::schema::types_capnp::timestamp::Reader<'_>>) -> String {
+fn nanos(stamp: &capnp::Result<smart_protocol::schema::types_capnp::timestamp::Reader<'_>>) -> String {
     stamp.as_ref().map(|s| s.get_nanoseconds()).unwrap_or(0).to_string()
 }
 
 /// A duration, as its nanoseconds.
-fn duration_nanos(value: &capnp::Result<crate::schema::types_capnp::duration::Reader<'_>>) -> String {
+fn duration_nanos(value: &capnp::Result<smart_protocol::schema::types_capnp::duration::Reader<'_>>) -> String {
     value.as_ref().map(|d| d.get_nanoseconds()).unwrap_or(0).to_string()
 }
 

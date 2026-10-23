@@ -2,7 +2,7 @@
 //! (grammar law #4). Ops `==, !=, >, <, ~=`; combinators `and` / `or`;
 //! parentheses optional but supported. A field that does not exist in the
 //! contract type is a USAGE error naming the VALID fields — generated from the
-//! schema ([`crate::contract::fields_of`]), never a hand-list.
+//! schema ([`smart_protocol::contract::fields_of`]), never a hand-list.
 //!
 //! The selector is schema-blind at runtime: the eval hands back a field's
 //! [`Cell`] (a borrowed value from the reader), and the predicate evaluates
@@ -102,7 +102,7 @@ impl Pred {
     /// `"NetworkInterface"`; pass `None` to skip field validation (tests).
     pub fn parse(tokens: &[String], type_name: Option<&str>) -> Result<Pred, SelectorError> {
         let valid: Option<Vec<String>> = type_name
-            .and_then(crate::contract::fields_of)
+            .and_then(smart_protocol::contract::fields_of)
             .map(|fields| fields.iter().map(|f| f.to_string()).collect());
         let mut parser = Parser { tokens, pos: 0, valid: valid.as_ref() };
         let pred = parser.parse_or()?;
@@ -307,7 +307,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "schema-network")]
+    #[cfg(feature = "cmd-net")]
     fn unknown_field_names_valid_fields() {
         let err = Pred::parse(&toks("nope == 1"), Some("NetworkInterface")).unwrap_err();
         assert!(matches!(err, SelectorError::UnknownField { .. }));

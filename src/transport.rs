@@ -37,7 +37,7 @@ use core::time::Duration;
 use capnp::message::ReaderOptions;
 
 use crate::rpc;
-use crate::schema::{abi_capnp, types_capnp};
+use smart_protocol::schema::{abi_capnp, types_capnp};
 
 /// The default RPC timeout applied to every blocking call.
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
@@ -432,14 +432,14 @@ impl Subscription {
 
     /// The interface and method ids of one of the subscription's methods.
     fn ids(&self, method: &str) -> Result<(u64, u16), CallError> {
-        let info = crate::contract::interface_by_name(self.stem, self.interface).ok_or_else(|| {
+        let info = smart_protocol::contract::interface_by_name(self.stem, self.interface).ok_or_else(|| {
             CallError::Transport(format!(
                 "the contract interface `{}` is not compiled into this build",
                 self.interface
             ))
         })?;
         let method_id =
-            crate::contract::method_id(self.stem, self.interface, method).ok_or_else(|| {
+            smart_protocol::contract::method_id(self.stem, self.interface, method).ok_or_else(|| {
                 CallError::Transport(format!(
                     "the contract interface `{}` has no `{method}` method in this build",
                     self.interface
@@ -631,10 +631,10 @@ impl Connection {
     /// an intersection before either commits to a call"); the answered ids
     /// are the ones the audit trail names.
     fn handshake(&mut self) -> Result<(), CallError> {
-        let interface = crate::contract::interface_by_name("abi", "AbiService").ok_or_else(|| {
+        let interface = smart_protocol::contract::interface_by_name("abi", "AbiService").ok_or_else(|| {
             CallError::Transport("the ABI interface is not compiled into this build".into())
         })?;
-        let method = crate::contract::method_id("abi", "AbiService", "handshake").ok_or_else(|| {
+        let method = smart_protocol::contract::method_id("abi", "AbiService", "handshake").ok_or_else(|| {
             CallError::Transport("the ABI handshake method is not in this build".into())
         })?;
         let mut message = capnp::message::Builder::new_default();
@@ -643,7 +643,7 @@ impl Connection {
             let mut request = params.reborrow().init_request();
             let mut caller = request.reborrow().init_caller_abi();
             caller.set_namespace(NAMESPACE);
-            let schemas = crate::contract::compiled_schemas();
+            let schemas = smart_protocol::contract::compiled_schemas();
             let mut versions = caller.reborrow().init_schema_versions(schemas.len() as u32);
             for (index, (stem, id)) in schemas.iter().enumerate() {
                 let mut version = versions.reborrow().get(index as u32);
@@ -701,7 +701,7 @@ impl Connection {
     /// Issue one contract call and return the results struct's bytes.
     ///
     /// `interface_id` is the contract interface's type id and `method_id` is
-    /// the method's ordinal — both GENERATED (see [`crate::contract`]), never
+    /// the method's ordinal — both GENERATED (see [`smart_protocol::contract`]), never
     /// hand-written here.
     pub fn call(
         &mut self,

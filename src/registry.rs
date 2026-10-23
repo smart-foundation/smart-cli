@@ -33,7 +33,7 @@ use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
 #[cfg(feature = "std")]
-use crate::schema::cli_capnp::cli_service;
+use smart_protocol::schema::cli_capnp::cli_service;
 #[cfg(feature = "std")]
 use crate::transport::{CallError, Connection};
 
@@ -156,8 +156,8 @@ pub enum Availability {
 /// The contract's CLI interface, by its GENERATED identity.
 #[cfg(feature = "std")]
 fn cli_interface() -> Option<(u64, u16)> {
-    let info = crate::contract::interface_named("CliService")?;
-    let list_commands = crate::contract::method_id(info.stem, info.name, "listCommands")?;
+    let info = smart_protocol::contract::interface_named("CliService")?;
+    let list_commands = smart_protocol::contract::method_id(info.stem, info.name, "listCommands")?;
     Some((info.type_id, list_commands))
 }
 
@@ -301,7 +301,7 @@ impl ServiceRegistry {
 #[cfg(feature = "std")]
 pub fn fetch(conn: &mut Connection) -> Option<ServiceRegistry> {
     let (interface_id, list_commands) = cli_interface()?;
-    let list_unavailable = crate::contract::method_id("cli", "CliService", "listUnavailable")?;
+    let list_unavailable = smart_protocol::contract::method_id("cli", "CliService", "listUnavailable")?;
     let mut registry = ServiceRegistry::default();
 
     // The unavailable list.
@@ -414,9 +414,9 @@ pub fn fetch(conn: &mut Connection) -> Option<ServiceRegistry> {
 /// The stable token of a reason class (cli.capnp `AvailabilityReason`).
 #[cfg(feature = "std")]
 fn reason_token(
-    reason: std::result::Result<crate::schema::cli_capnp::AvailabilityReason, capnp::NotInSchema>,
+    reason: std::result::Result<smart_protocol::schema::cli_capnp::AvailabilityReason, capnp::NotInSchema>,
 ) -> &'static str {
-    use crate::schema::cli_capnp::AvailabilityReason as R;
+    use smart_protocol::schema::cli_capnp::AvailabilityReason as R;
     match reason {
         Ok(R::Available) => "available",
         Ok(R::CapabilityDenied) => "capabilityDenied",
@@ -438,7 +438,7 @@ pub fn list_unavailable(conn: &mut Connection) -> Availability {
         Some(ids) => ids,
         None => return Availability::Unpublished,
     };
-    let Some(list_unavailable) = crate::contract::method_id("cli", "CliService", "listUnavailable")
+    let Some(list_unavailable) = smart_protocol::contract::method_id("cli", "CliService", "listUnavailable")
     else {
         return Availability::Unpublished;
     };
@@ -535,7 +535,7 @@ pub struct TaskSpec {
     /// The contract calls this task makes, by (interface, method) NAME.
     ///
     /// The **ordinals are never written here**: they are read from the
-    /// GENERATED contract table (`crate::contract`), which build.rs derives
+    /// GENERATED contract table (`smart_protocol::contract`), which build.rs derives
     /// from the schema tree. A task that names a method this build did not
     /// compile says so in its route line — never a guessed ordinal.
     pub calls: &'static [(&'static str, &'static str)],
@@ -589,10 +589,10 @@ pub fn route(spec: &TaskSpec) -> String {
 /// `None` when this build did not compile the schema that declares it — the
 /// route line then says so, rather than showing an ordinal it does not know.
 fn method_id_of(interface: &str, method: &str) -> String {
-    let Some(info) = crate::contract::interface_named(interface) else {
+    let Some(info) = smart_protocol::contract::interface_named(interface) else {
         return "(not compiled in this build)".to_string();
     };
-    match crate::contract::method_id(info.stem, info.name, method) {
+    match smart_protocol::contract::method_id(info.stem, info.name, method) {
         Some(id) => format!("@{id}"),
         None => "(not compiled in this build)".to_string(),
     }

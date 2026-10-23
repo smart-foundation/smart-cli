@@ -30,8 +30,8 @@ use alloc::vec::Vec;
 
 use crate::json;
 use crate::present;
-use crate::schema::logging_capnp as wire;
-use crate::schema::types_capnp::LogLevel;
+use smart_protocol::schema::logging_capnp as wire;
+use smart_protocol::schema::types_capnp::LogLevel;
 use crate::transport as tp;
 
 use super::domain::{self, Presenter};
@@ -44,7 +44,7 @@ const INTERFACE: &str = "Logging";
 
 /// The family's presenter lookup: keyed by **(schema id, method name)**.
 pub fn presenter(schema_id: u64, method: &str) -> Option<Presenter> {
-    if schema_id != crate::contract::schema_id(STEM)? {
+    if schema_id != smart_protocol::contract::schema_id(STEM)? {
         return None;
     }
     Some(match method {
@@ -447,12 +447,12 @@ fn pull_entries(
     subscription: &crate::transport::Subscription,
     max: u32,
 ) -> Result<Vec<u8>, crate::transport::CallError> {
-    let info = crate::contract::interface_by_name("logging", "LogSubscription").ok_or_else(|| {
+    let info = smart_protocol::contract::interface_by_name("logging", "LogSubscription").ok_or_else(|| {
         crate::transport::CallError::Transport(
             "the contract interface `LogSubscription` is not compiled into this build".to_string(),
         )
     })?;
-    let method_id = crate::contract::method_id("logging", "LogSubscription", "pull").ok_or_else(|| {
+    let method_id = smart_protocol::contract::method_id("logging", "LogSubscription", "pull").ok_or_else(|| {
         crate::transport::CallError::Transport(
             "the contract interface `LogSubscription` has no `pull` method in this build".to_string(),
         )
@@ -609,9 +609,9 @@ fn void_verb(app: &mut App, method: &str, verb: &str, target: &str, params: &[u8
         Ok(bytes) => bytes,
         Err(error) => return super::emit_error(app, &error),
     };
-    let Some((json_text, human_text)) = tp::with_root::<crate::schema::types_capnp::void_result::Owned, _, _>(&bytes, |r| {
+    let Some((json_text, human_text)) = tp::with_root::<smart_protocol::schema::types_capnp::void_result::Owned, _, _>(&bytes, |r| {
         match r.which() {
-            Ok(crate::schema::types_capnp::void_result::Which::Success(_)) => (
+            Ok(smart_protocol::schema::types_capnp::void_result::Which::Success(_)) => (
                 format!("{{\"verb\":\"{verb}\",\"target\":\"{target}\",\"changed\":true}}"),
                 format!(
                     "  {} {} {} {}",
@@ -621,7 +621,7 @@ fn void_verb(app: &mut App, method: &str, verb: &str, target: &str, params: &[u8
                     domain::dim(app, "— the engine's own host-mutating path, accepted")
                 ),
             ),
-            Ok(crate::schema::types_capnp::void_result::Which::Error(error)) => {
+            Ok(smart_protocol::schema::types_capnp::void_result::Which::Error(error)) => {
                 let reason = error.map(|e| text(e.get_message())).unwrap_or_default();
                 (
                     format!("{{\"verb\":\"{verb}\",\"error\":\"{reason}\"}}"),
@@ -680,12 +680,12 @@ fn export(app: &mut App, args: &[String], _path: &str) -> i32 {
     let Some((json_text, human_text)) = tp::with_root::<wire::logging::export_results::Owned, _, _>(&bytes, |r| {
         let (payload, count) = match r.get_data() {
             Ok(handle) => match handle.which() {
-                Ok(crate::schema::types_capnp::data_handle::Which::Inline(data)) => {
+                Ok(smart_protocol::schema::types_capnp::data_handle::Which::Inline(data)) => {
                     let bytes = data.map(|d| d.to_vec()).unwrap_or_default();
                     let count = bytes.len();
                     (String::from_utf8_lossy(&bytes).to_string(), count)
                 }
-                Ok(crate::schema::types_capnp::data_handle::Which::Buffer(buffer)) => {
+                Ok(smart_protocol::schema::types_capnp::data_handle::Which::Buffer(buffer)) => {
                     let id = buffer
                         .map(|b| b.get_id().to_string())
                         .unwrap_or_default();

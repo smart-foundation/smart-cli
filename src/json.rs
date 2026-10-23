@@ -17,9 +17,9 @@ use alloc::format;
 use alloc::string::String;
 use core::fmt::Write as _;
 
-use crate::schema::types_capnp;
-#[cfg(feature = "schema-network")]
-use crate::schema::network_capnp as net;
+use smart_protocol::schema::types_capnp;
+#[cfg(feature = "cmd-net")]
+use smart_protocol::schema::network_capnp as net;
 
 // ── Primitives that borrow ────────────────────────────────────────────────
 
@@ -215,7 +215,7 @@ pub fn render_v6(octets: &[u8]) -> String {
 // ── Enums rendered as their contract token ────────────────────────────────
 
 /// The token for a `FirewallDirection`.
-#[cfg(feature = "schema-network")]
+#[cfg(feature = "cmd-net")]
 pub fn firewall_direction(d: net::FirewallDirection) -> &'static str {
     match d {
         net::FirewallDirection::Inbound => "inbound",
@@ -226,7 +226,7 @@ pub fn firewall_direction(d: net::FirewallDirection) -> &'static str {
 }
 
 /// The token for a `FirewallAction`.
-#[cfg(feature = "schema-network")]
+#[cfg(feature = "cmd-net")]
 pub fn firewall_action(a: net::FirewallAction) -> &'static str {
     match a {
         net::FirewallAction::Accept => "accept",
@@ -278,7 +278,7 @@ pub fn error_object(out: &mut String, code: types_capnp::ErrorCode, message: &st
 // ═════════════════════════════════════════════════════════════════════════
 
 /// A `NetworkInterface`.
-#[cfg(feature = "schema-network")]
+#[cfg(feature = "cmd-net")]
 pub fn write_network_interface(out: &mut String, it: net::network_interface::Reader<'_>) {
     let mut o = Obj::new(out);
     o.key("id").int(it.get_id().map(|i| i.get_id()).unwrap_or(0));
@@ -315,7 +315,7 @@ pub fn write_network_interface(out: &mut String, it: net::network_interface::Rea
 }
 
 /// A `RadioState`.
-#[cfg(feature = "schema-network")]
+#[cfg(feature = "cmd-net")]
 pub fn write_radio_state(out: &mut String, r: net::radio_state::Reader<'_>) {
     let mut o = Obj::new(out);
     o.key("name").str(r.get_name().map(|n| n.to_str().unwrap_or("")).unwrap_or(""));
@@ -326,7 +326,7 @@ pub fn write_radio_state(out: &mut String, r: net::radio_state::Reader<'_>) {
 }
 
 /// A `WifiStatus` (the wifi sub-struct of `InterfaceConnectionStatus`).
-#[cfg(feature = "schema-network")]
+#[cfg(feature = "cmd-net")]
 pub fn write_wifi_status(out: &mut String, w: net::wifi_status::Reader<'_>) {
     let mut o = Obj::new(out);
     o.key("ssid").str(w.get_ssid().map(|s| s.to_str().unwrap_or("")).unwrap_or(""));
@@ -339,7 +339,7 @@ pub fn write_wifi_status(out: &mut String, w: net::wifi_status::Reader<'_>) {
 }
 
 /// An `InterfaceConnectionStatus` (the `getStatus` result / `net interface`).
-#[cfg(feature = "schema-network")]
+#[cfg(feature = "cmd-net")]
 pub fn write_connection_status(out: &mut String, s: net::interface_connection_status::Reader<'_>) {
     let mut o = Obj::new(out);
     o.key("connected").boolean(s.get_connected());
@@ -361,7 +361,7 @@ pub fn write_connection_status(out: &mut String, s: net::interface_connection_st
 }
 
 /// An `InterfaceCounters` (the bandwidth read / watch event).
-#[cfg(feature = "schema-network")]
+#[cfg(feature = "cmd-net")]
 pub fn write_counters(out: &mut String, c: net::interface_counters::Reader<'_>) {
     let mut o = Obj::new(out);
     o.key("bytesIn").int(c.get_bytes_in());
@@ -376,7 +376,7 @@ pub fn write_counters(out: &mut String, c: net::interface_counters::Reader<'_>) 
 }
 
 /// A `WifiNetwork` (a scan result).
-#[cfg(feature = "schema-network")]
+#[cfg(feature = "cmd-net")]
 pub fn write_wifi_network(out: &mut String, n: net::wifi_network::Reader<'_>) {
     let mut o = Obj::new(out);
     o.key("ssid").str(n.get_ssid().map(|s| s.to_str().unwrap_or("")).unwrap_or(""));
@@ -392,7 +392,7 @@ pub fn write_wifi_network(out: &mut String, n: net::wifi_network::Reader<'_>) {
 }
 
 /// A `KnownWifiNetwork` (`net wifi list`).
-#[cfg(feature = "schema-network")]
+#[cfg(feature = "cmd-net")]
 pub fn write_known_network(out: &mut String, n: net::known_wifi_network::Reader<'_>) {
     let mut o = Obj::new(out);
     o.key("ssid").str(n.get_ssid().map(|s| s.to_str().unwrap_or("")).unwrap_or(""));
@@ -405,7 +405,7 @@ pub fn write_known_network(out: &mut String, n: net::known_wifi_network::Reader<
 }
 
 /// A `Route` (the routing table entry).
-#[cfg(feature = "schema-network")]
+#[cfg(feature = "cmd-net")]
 pub fn write_route(out: &mut String, r: net::route::Reader<'_>) {
     let mut o = Obj::new(out);
     o.key("destinationCidr")
@@ -417,7 +417,7 @@ pub fn write_route(out: &mut String, r: net::route::Reader<'_>) {
 }
 
 /// A `ProxyConfig` (the host's own proxy).
-#[cfg(feature = "schema-network")]
+#[cfg(feature = "cmd-net")]
 pub fn write_proxy_config(out: &mut String, c: net::proxy_config::Reader<'_>) {
     let mut o = Obj::new(out);
     o.key("enabled").boolean(c.get_enabled());
@@ -440,7 +440,7 @@ pub fn write_proxy_config(out: &mut String, c: net::proxy_config::Reader<'_>) {
 }
 
 /// A network `DnsServer` (the `getDnsServers` result).
-#[cfg(feature = "schema-network")]
+#[cfg(feature = "cmd-net")]
 pub fn write_dns_server(out: &mut String, s: net::dns_server::Reader<'_>) {
     let mut o = Obj::new(out);
     if let Ok(address) = s.get_address() {
@@ -452,7 +452,7 @@ pub fn write_dns_server(out: &mut String, s: net::dns_server::Reader<'_>) {
 }
 
 /// A `VpnProfile` (`net vpn` listing).
-#[cfg(feature = "schema-network")]
+#[cfg(feature = "cmd-net")]
 pub fn write_vpn_profile(out: &mut String, p: net::vpn_profile::Reader<'_>) {
     let mut o = Obj::new(out);
     o.key("id").int(p.get_id().map(|i| i.get_id()).unwrap_or(0));
@@ -466,7 +466,7 @@ pub fn write_vpn_profile(out: &mut String, p: net::vpn_profile::Reader<'_>) {
 }
 
 /// A `VpnConnection`.
-#[cfg(feature = "schema-network")]
+#[cfg(feature = "cmd-net")]
 pub fn write_vpn_connection(out: &mut String, c: net::vpn_connection::Reader<'_>) {
     let mut o = Obj::new(out);
     o.key("id").int(c.get_id().map(|i| i.get_id()).unwrap_or(0));
@@ -477,7 +477,7 @@ pub fn write_vpn_connection(out: &mut String, c: net::vpn_connection::Reader<'_>
 }
 
 /// A `TracerouteHop`.
-#[cfg(feature = "schema-network")]
+#[cfg(feature = "cmd-net")]
 pub fn write_traceroute_hop(out: &mut String, h: net::traceroute_hop::Reader<'_>) {
     let mut o = Obj::new(out);
     o.key("hop").int(h.get_hop());
@@ -489,7 +489,7 @@ pub fn write_traceroute_hop(out: &mut String, h: net::traceroute_hop::Reader<'_>
 }
 
 /// A `FirewallRule` (the firewall read / hit-stats view).
-#[cfg(feature = "schema-network")]
+#[cfg(feature = "cmd-net")]
 pub fn write_firewall_rule(out: &mut String, r: net::firewall_rule::Reader<'_>) {
     let mut o = Obj::new(out);
     o.key("name").str(r.get_name().map(|t| t.to_str().unwrap_or("")).unwrap_or(""));
@@ -503,8 +503,8 @@ pub fn write_firewall_rule(out: &mut String, r: net::firewall_rule::Reader<'_>) 
 }
 
 /// A `ServiceDescriptor` (the discovery registry's listing).
-#[cfg(feature = "schema-discovery")]
-pub fn write_service_descriptor(out: &mut String, svc: crate::schema::discovery_capnp::service_descriptor::Reader<'_>) {
+#[cfg(feature = "cmd-discovery")]
+pub fn write_service_descriptor(out: &mut String, svc: smart_protocol::schema::discovery_capnp::service_descriptor::Reader<'_>) {
     let mut o = Obj::new(out);
     if let Ok(id) = svc.get_id() {
         o.key("id").int(id.get_id());

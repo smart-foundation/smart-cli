@@ -6,7 +6,7 @@
 use alloc::string::{String, ToString};
 
 use crate::json;
-use crate::schema::tunnel_capnp::tunnel_service as wire;
+use smart_protocol::schema::tunnel_capnp::tunnel_service as wire;
 use crate::transport as tp;
 
 use super::{go, App, Handler};
@@ -98,7 +98,7 @@ fn tunnel_info(bytes: &[u8], out: &mut String) {
     out.push_str("{\"info\":");
     let body = tp::with_root::<wire::get_info_results::Owned, _, _>(bytes, |r| {
         match r.get_result().ok().and_then(|res| match res.which() {
-            Ok(crate::schema::tunnel_capnp::tunnel_info_result::Which::Info(Ok(info))) => Some(info),
+            Ok(smart_protocol::schema::tunnel_capnp::tunnel_info_result::Which::Info(Ok(info))) => Some(info),
             _ => None,
         }) {
             Some(info) => {
@@ -121,7 +121,7 @@ fn tunnel_info(bytes: &[u8], out: &mut String) {
 fn tunnel_info_human(bytes: &[u8]) -> String {
     tp::with_root::<wire::get_info_results::Owned, _, _>(bytes, |r| {
         match r.get_result().ok().and_then(|res| match res.which() {
-            Ok(crate::schema::tunnel_capnp::tunnel_info_result::Which::Info(Ok(info))) => Some(info),
+            Ok(smart_protocol::schema::tunnel_capnp::tunnel_info_result::Which::Info(Ok(info))) => Some(info),
             _ => None,
         }) {
             Some(info) => format!(

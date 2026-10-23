@@ -30,9 +30,10 @@
 
 extern crate alloc;
 
-// ── The contract, generated at build time from the canonical schemas ──
-include!(concat!(env!("OUT_DIR"), "/contract.rs"));
-include!(concat!(env!("OUT_DIR"), "/schema_modules.rs"));
+// ── The contract: generated capnp bindings + contract lookups from
+//    smart-protocol-rs (which owns the build.rs codegen) ──
+pub use smart_protocol::schema as schema;
+pub use smart_protocol::contract as contract;
 
 // ── Client core (no_std + alloc unless noted): the AI-first surface ──
 pub mod json; // contract-shaped JSON: keys verbatim, values from the readers

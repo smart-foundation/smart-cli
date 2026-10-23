@@ -7,7 +7,7 @@ use alloc::string::{String, ToString};
 
 use crate::json;
 use crate::render;
-use crate::schema::bluetooth_capnp::{self as bt, bluetooth_service as wire};
+use smart_protocol::schema::bluetooth_capnp::{self as bt, bluetooth_service as wire};
 use crate::transport as tp;
 
 use super::{go, App, Handler};
@@ -17,7 +17,7 @@ use super::{go, App, Handler};
 /// same id from the interface name).
 #[allow(dead_code)]
 fn id() -> u64 {
-    crate::contract::schema_id("bluetooth").unwrap_or(0)
+    smart_protocol::contract::schema_id("bluetooth").unwrap_or(0)
 }
 
 fn msg<F>(f: F) -> Vec<u8>

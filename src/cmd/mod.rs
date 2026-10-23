@@ -12,7 +12,7 @@ use alloc::vec::Vec;
 use std::io::Write;
 
 use crate::completions;
-use crate::contract;
+use smart_protocol::contract;
 use crate::json;
 use crate::registry::{self, Availability};
 use crate::render::Style;
@@ -169,7 +169,7 @@ impl<'a> App<'a> {
     /// The `--verbose` audit line naming one call's schema identity.
     ///
     /// The schema stem, the interface, the method and the method id are all
-    /// GENERATED (see [`crate::contract`]) — the audit trail cannot drift
+    /// GENERATED (see [`smart_protocol::contract`]) — the audit trail cannot drift
     /// from the contract.
     pub fn trace(&self, target: &Target, method: &str) {
         if self.mode.verbose {
@@ -431,13 +431,13 @@ pub fn emit_error(app: &App, error: &CallError) -> i32 {
 }
 
 /// The contract's `T.ErrorCode::Failed` without importing types in every arm.
-fn smart_cli_schema_types_failed() -> crate::schema::types_capnp::ErrorCode {
-    crate::schema::types_capnp::ErrorCode::Failed
+fn smart_cli_schema_types_failed() -> smart_protocol::schema::types_capnp::ErrorCode {
+    smart_protocol::schema::types_capnp::ErrorCode::Failed
 }
 
 /// The contract `T.ErrorCode::Unavailable` without importing types in every arm.
-fn smart_cli_schema_types_unavailable() -> crate::schema::types_capnp::ErrorCode {
-    crate::schema::types_capnp::ErrorCode::Unavailable
+fn smart_cli_schema_types_unavailable() -> smart_protocol::schema::types_capnp::ErrorCode {
+    smart_protocol::schema::types_capnp::ErrorCode::Unavailable
 }
 
 // ── Standard result handlers ──────────────────────────────────────────────

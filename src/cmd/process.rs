@@ -34,8 +34,8 @@ use alloc::vec::Vec;
 
 use crate::json;
 use crate::present;
-use crate::schema::process_capnp as wire;
-use crate::schema::types_capnp::{ExecutionState, MemoryPerms};
+use smart_protocol::schema::process_capnp as wire;
+use smart_protocol::schema::types_capnp::{ExecutionState, MemoryPerms};
 use crate::transport as tp;
 
 use super::domain::{self, Presenter};
@@ -48,7 +48,7 @@ const INTERFACE: &str = "Process";
 
 /// The family's presenter lookup: keyed by **(schema id, method name)**.
 pub fn presenter(schema_id: u64, method: &str) -> Option<Presenter> {
-    if schema_id != crate::contract::schema_id(STEM)? {
+    if schema_id != smart_protocol::contract::schema_id(STEM)? {
         return None;
     }
     Some(match method {
@@ -1629,7 +1629,7 @@ fn read_memory(app: &mut App, args: &[String], _path: &str) -> i32 {
                 .as_ref()
                 .and_then(|r| r.get_data().ok())
                 .and_then(|handle| match handle.which() {
-                    Ok(crate::schema::types_capnp::data_handle::Which::Inline(data)) => {
+                    Ok(smart_protocol::schema::types_capnp::data_handle::Which::Inline(data)) => {
                         data.map(|bytes| bytes.to_vec()).ok()
                     }
                     _ => None,
@@ -2003,14 +2003,14 @@ fn pull_process(
     subscription: &crate::transport::Subscription,
     max: u32,
 ) -> Result<Vec<u8>, crate::transport::CallError> {
-    let info = crate::contract::interface_by_name("process", "ProcessSubscription").ok_or_else(|| {
+    let info = smart_protocol::contract::interface_by_name("process", "ProcessSubscription").ok_or_else(|| {
         crate::transport::CallError::Transport(
             "the contract interface `ProcessSubscription` is not compiled into this build"
                 .to_string(),
         )
     })?;
     let method_id =
-        crate::contract::method_id("process", "ProcessSubscription", "pull").ok_or_else(|| {
+        smart_protocol::contract::method_id("process", "ProcessSubscription", "pull").ok_or_else(|| {
             crate::transport::CallError::Transport(
                 "the contract interface `ProcessSubscription` has no `pull` method in this build"
                     .to_string(),
@@ -2030,7 +2030,7 @@ fn pull_exit(
     subscription: &crate::transport::Subscription,
     max: u32,
 ) -> Result<Vec<u8>, crate::transport::CallError> {
-    let info = crate::contract::interface_by_name("process", "ExitNotificationSubscription")
+    let info = smart_protocol::contract::interface_by_name("process", "ExitNotificationSubscription")
         .ok_or_else(|| {
             crate::transport::CallError::Transport(
                 "the contract interface `ExitNotificationSubscription` is not compiled into this                  build"
@@ -2038,7 +2038,7 @@ fn pull_exit(
             )
         })?;
     let method_id =
-        crate::contract::method_id("process", "ExitNotificationSubscription", "pull").ok_or_else(
+        smart_protocol::contract::method_id("process", "ExitNotificationSubscription", "pull").ok_or_else(
             || {
                 crate::transport::CallError::Transport(
                     "the contract interface `ExitNotificationSubscription` has no `pull` method in                      this build"
@@ -2062,9 +2062,9 @@ fn pull_exit(
 /// A `T.VoidResult` answer, in the shell's own "✎ verb target" line.
 fn void_verb(app: &mut App, verb: &str, target: &str, bytes: &[u8]) -> i32 {
     let Some((json_text, human_text)) =
-        tp::with_root::<crate::schema::types_capnp::void_result::Owned, _, _>(bytes, |r| {
+        tp::with_root::<smart_protocol::schema::types_capnp::void_result::Owned, _, _>(bytes, |r| {
             match r.which() {
-                Ok(crate::schema::types_capnp::void_result::Which::Success(_)) => (
+                Ok(smart_protocol::schema::types_capnp::void_result::Which::Success(_)) => (
                     format!("{{\"verb\":\"{verb}\",\"target\":\"{target}\",\"changed\":true}}"),
                     format!(
                         "  {} {} {} {}",
@@ -2074,7 +2074,7 @@ fn void_verb(app: &mut App, verb: &str, target: &str, bytes: &[u8]) -> i32 {
                         domain::dim(app, "— the engine's own host-mutating path, accepted")
                     ),
                 ),
-                Ok(crate::schema::types_capnp::void_result::Which::Error(error)) => {
+                Ok(smart_protocol::schema::types_capnp::void_result::Which::Error(error)) => {
                     let reason = error.map(|e| text(e.get_message())).unwrap_or_default();
                     (
                         format!("{{\"verb\":\"{verb}\",\"error\":\"{reason}\"}}"),
@@ -2150,22 +2150,22 @@ fn cpu_label(fraction: f64) -> String {
 }
 
 /// An exit status, in the shell's own words.
-fn exit_verdict(status: Option<&crate::schema::types_capnp::exit_status::Reader<'_>>) -> (&'static str, String) {
+fn exit_verdict(status: Option<&smart_protocol::schema::types_capnp::exit_status::Reader<'_>>) -> (&'static str, String) {
     let Some(status) = status else {
         return ("unknown", "the host did not answer".to_string());
     };
     match status.which() {
-        Ok(crate::schema::types_capnp::exit_status::Which::Exited(code)) => {
+        Ok(smart_protocol::schema::types_capnp::exit_status::Which::Exited(code)) => {
             ("exited", format!("exited with {code}"))
         }
-        Ok(crate::schema::types_capnp::exit_status::Which::Signaled(signal)) => (
+        Ok(smart_protocol::schema::types_capnp::exit_status::Which::Signaled(signal)) => (
             "signaled",
             format!(
                 "killed by signal {}",
-                signal_token(signal.unwrap_or(crate::schema::types_capnp::SignalKind::Terminate))
+                signal_token(signal.unwrap_or(smart_protocol::schema::types_capnp::SignalKind::Terminate))
             ),
         ),
-        Ok(crate::schema::types_capnp::exit_status::Which::TimedOut(_)) => {
+        Ok(smart_protocol::schema::types_capnp::exit_status::Which::TimedOut(_)) => {
             ("timedOut", "timed out".to_string())
         }
         _ => ("custom", "a backend-specific ending".to_string()),
@@ -2173,8 +2173,8 @@ fn exit_verdict(status: Option<&crate::schema::types_capnp::exit_status::Reader<
 }
 
 /// A signal's own token, from the contract's enum.
-fn signal_token(signal: crate::schema::types_capnp::SignalKind) -> &'static str {
-    use crate::schema::types_capnp::SignalKind;
+fn signal_token(signal: smart_protocol::schema::types_capnp::SignalKind) -> &'static str {
+    use smart_protocol::schema::types_capnp::SignalKind;
     match signal {
         SignalKind::Terminate => "terminate",
         SignalKind::Interrupt => "interrupt",
@@ -2192,7 +2192,7 @@ fn signal_token(signal: crate::schema::types_capnp::SignalKind) -> &'static str 
 }
 
 /// A timestamp, as the contract-shaped JSON.
-fn timestamp(out: &mut String, stamp: &capnp::Result<crate::schema::types_capnp::timestamp::Reader<'_>>) {
+fn timestamp(out: &mut String, stamp: &capnp::Result<smart_protocol::schema::types_capnp::timestamp::Reader<'_>>) {
     let mut o = json::Obj::new(out);
     o.key("nanoseconds")
         .int(stamp.as_ref().map(|s| s.get_nanoseconds()).unwrap_or(0));
@@ -2200,7 +2200,7 @@ fn timestamp(out: &mut String, stamp: &capnp::Result<crate::schema::types_capnp:
 }
 
 /// A duration, as the contract-shaped JSON.
-fn duration(out: &mut String, value: &capnp::Result<crate::schema::types_capnp::duration::Reader<'_>>) {
+fn duration(out: &mut String, value: &capnp::Result<smart_protocol::schema::types_capnp::duration::Reader<'_>>) {
     let mut o = json::Obj::new(out);
     o.key("nanoseconds")
         .int(value.as_ref().map(|d| d.get_nanoseconds()).unwrap_or(0));

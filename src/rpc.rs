@@ -560,7 +560,7 @@ fn call_error(error: capnp::Error) -> CallError {
             // simply does not offer that method here.
             if error.kind == capnp::ErrorKind::Unimplemented {
                 return CallError::Service(crate::transport::ServiceError {
-                    code: crate::schema::types_capnp::ErrorCode::NotSupported,
+                    code: smart_protocol::schema::types_capnp::ErrorCode::NotSupported,
                     message: text.to_string(),
                     context: String::new(),
                 });
@@ -582,7 +582,7 @@ mod tests {
         };
         match call_error(error) {
             CallError::Service(service) => {
-                assert_eq!(service.code, crate::schema::types_capnp::ErrorCode::NotSupported);
+                assert_eq!(service.code, smart_protocol::schema::types_capnp::ErrorCode::NotSupported);
                 assert_eq!(service.message, "no-backend: dns");
             }
             other => panic!("expected a service error, got {other:?}"),

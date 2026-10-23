@@ -39,9 +39,9 @@
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
-#[cfg(feature = "schema-discovery")]
-use crate::schema::discovery_capnp::discovery as wire;
-#[cfg(feature = "schema-discovery")]
+#[cfg(feature = "cmd-discovery")]
+use smart_protocol::schema::discovery_capnp::discovery as wire;
+#[cfg(feature = "cmd-discovery")]
 use crate::transport::Endpoint;
 use crate::transport::{CallError, Connection};
 
@@ -59,7 +59,7 @@ pub const METADATA_CALL_MODEL: &str = "callModel";
 pub const METADATA_CARRIER: &str = "carrier";
 
 /// What discovery published, and what this client made of it.
-#[cfg(feature = "schema-discovery")]
+#[cfg(feature = "cmd-discovery")]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Resolved {
     /// The service name discovery published.
@@ -74,7 +74,7 @@ pub struct Resolved {
     pub carrier: String,
 }
 
-#[cfg(feature = "schema-discovery")]
+#[cfg(feature = "cmd-discovery")]
 impl Resolved {
     /// The hops of the universal path, as the audit trail prints them.
     pub fn hops(&self) -> Vec<String> {
@@ -100,12 +100,12 @@ impl Resolved {
 /// holds. The endpoint it returns is NOT dialled here: the caller dials it
 /// with [`connect_resolved`], so the ABI negotiation happens on the domain's
 /// own connection.
-#[cfg(feature = "schema-discovery")]
+#[cfg(feature = "cmd-discovery")]
 pub fn resolve_domain(conn: &mut Connection, domain: &str) -> Result<Resolved, CallError> {
-    let interface = crate::contract::interface_by_name("discovery", "Discovery").ok_or_else(|| {
+    let interface = smart_protocol::contract::interface_by_name("discovery", "Discovery").ok_or_else(|| {
         CallError::Transport("this build does not compile the discovery schema".into())
     })?;
-    let method = crate::contract::method_id("discovery", "Discovery", "lookup")
+    let method = smart_protocol::contract::method_id("discovery", "Discovery", "lookup")
         .ok_or_else(|| CallError::Transport("this build has no discovery lookup method".into()))?;
     let mut message = capnp::message::Builder::new_default();
     {
@@ -218,15 +218,15 @@ pub fn resolve_domain(conn: &mut Connection, domain: &str) -> Result<Resolved, C
 /// on (`Connection::schema_ids`): the caller declared the schemas it
 /// speaks, the service answered with the ones it speaks, and the agreed set
 /// is what is left.
-#[cfg(feature = "schema-discovery")]
+#[cfg(feature = "cmd-discovery")]
 pub fn connect_resolved(resolved: &Resolved) -> Result<Connection, CallError> {
     Connection::connect(&resolved.endpoint)
 }
 
 /// Read one metadata entry out of an open metadata map.
-#[cfg(feature = "schema-discovery")]
+#[cfg(feature = "cmd-discovery")]
 fn metadata_of(
-    map: Option<crate::schema::types_capnp::string_map::Reader<'_>>,
+    map: Option<smart_protocol::schema::types_capnp::string_map::Reader<'_>>,
     key: &str,
 ) -> String {
     let Some(map) = map else {
@@ -304,16 +304,16 @@ impl PublishedCapability {
 /// This is the authority question asked of the service itself: the CLI does
 /// not decide what the caller may do — it renders what the service published.
 pub fn capabilities(conn: &mut Connection) -> Result<Vec<PublishedCapability>, CallError> {
-    let interface = crate::contract::interface_by_name("capability", "CapabilityService")
+    let interface = smart_protocol::contract::interface_by_name("capability", "CapabilityService")
         .ok_or_else(|| {
             CallError::Transport("this build does not compile the capability schema".into())
         })?;
-    let method = crate::contract::method_id("capability", "CapabilityService", "list")
+    let method = smart_protocol::contract::method_id("capability", "CapabilityService", "list")
         .ok_or_else(|| CallError::Transport("this build has no capability list method".into()))?;
     let mut message = capnp::message::Builder::new_default();
     {
         let mut params =
-            message.init_root::<crate::schema::capability_capnp::capability_service::list_params::Builder<'_>>();
+            message.init_root::<smart_protocol::schema::capability_capnp::capability_service::list_params::Builder<'_>>();
         params.reborrow().init_filter();
         let mut page = params.reborrow().init_pagination();
         page.set_offset(0);
@@ -322,7 +322,7 @@ pub fn capabilities(conn: &mut Connection) -> Result<Vec<PublishedCapability>, C
     let payload = crate::transport::encode_message(&message);
     let bytes = conn.call(interface.type_id, method, &payload)?;
     let reader = crate::transport::decode_message::<
-        crate::schema::capability_capnp::capability_service::list_results::Owned,
+        smart_protocol::schema::capability_capnp::capability_service::list_results::Owned,
     >(&bytes)
     .map_err(CallError::Transport)?;
     let results = reader
@@ -367,9 +367,9 @@ pub fn capabilities(conn: &mut Connection) -> Result<Vec<PublishedCapability>, C
 
 /// The stable token of a capability operation (the contract's own enum).
 fn operation_token(
-    operation: Result<crate::schema::capability_capnp::Operation, capnp::NotInSchema>,
+    operation: Result<smart_protocol::schema::capability_capnp::Operation, capnp::NotInSchema>,
 ) -> String {
-    use crate::schema::capability_capnp::Operation as Op;
+    use smart_protocol::schema::capability_capnp::Operation as Op;
     match operation {
         Ok(Op::Read) => "read".to_string(),
         Ok(Op::Write) => "write".to_string(),

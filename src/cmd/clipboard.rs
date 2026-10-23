@@ -4,7 +4,7 @@ use alloc::vec::Vec;
 
 use crate::json;
 use crate::present;
-use crate::schema::clipboard_capnp as wire;
+use smart_protocol::schema::clipboard_capnp as wire;
 use crate::transport as tp;
 
 use super::domain::{self, Presenter};
@@ -14,7 +14,7 @@ const STEM: &str = "clipboard";
 const INTERFACE: &str = "Clipboard";
 
 pub fn presenter(schema_id: u64, method: &str) -> Option<Presenter> {
-    if schema_id != crate::contract::schema_id(STEM)? {
+    if schema_id != smart_protocol::contract::schema_id(STEM)? {
         return None;
     }
     Some(match method {
@@ -110,7 +110,7 @@ fn get(app: &mut App, args: &[String], path: &str) -> i32 {
                 let mt = content.as_ref().and_then(|cc| cc.get_mime_type().ok());
                 let mime = format!("{}/{}", mt.as_ref().and_then(|m|m.get_type().ok()).map(|t|t.to_str().unwrap_or("")).unwrap_or(""), mt.as_ref().and_then(|m|m.get_subtype().ok()).map(|t|t.to_str().unwrap_or("")).unwrap_or(""));
                 let data = content.as_ref().and_then(|cc| cc.get_data().ok()).and_then(|h| match h.which() {
-                    Ok(crate::schema::types_capnp::data_handle::Which::Inline(b)) => b.map(|x| x.to_vec()).ok(),
+                    Ok(smart_protocol::schema::types_capnp::data_handle::Which::Inline(b)) => b.map(|x| x.to_vec()).ok(),
                     _ => None,
                 }).unwrap_or_default();
                 let txt = String::from_utf8_lossy(&data).to_string();

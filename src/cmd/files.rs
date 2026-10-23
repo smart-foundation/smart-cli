@@ -37,8 +37,8 @@ use alloc::vec::Vec;
 
 use crate::json;
 use crate::present;
-use crate::schema::files_capnp as wire;
-use crate::schema::files_capnp::{
+use smart_protocol::schema::files_capnp as wire;
+use smart_protocol::schema::files_capnp::{
     FileEventType, FileLockType, FileType, OpenMode, RetentionAction, SortField, SortOrder,
     SpecialPathType,
 };
@@ -54,7 +54,7 @@ const INTERFACE: &str = "Files";
 
 /// The family's presenter lookup: keyed by **(schema id, method name)**.
 pub fn presenter(schema_id: u64, method: &str) -> Option<Presenter> {
-    if schema_id != crate::contract::schema_id(STEM)? {
+    if schema_id != smart_protocol::contract::schema_id(STEM)? {
         return None;
     }
     Some(match method {
@@ -636,7 +636,7 @@ fn cat(app: &mut App, args: &[String], _path: &str) -> i32 {
         r.get_data()
             .ok()
             .and_then(|handle| match handle.which() {
-                Ok(crate::schema::types_capnp::data_handle::Which::Inline(data)) => {
+                Ok(smart_protocol::schema::types_capnp::data_handle::Which::Inline(data)) => {
                     data.map(|bytes| bytes.to_vec()).ok()
                 }
                 _ => None,
@@ -2968,9 +2968,9 @@ fn write_lock_file(app: &mut App, args: &[String], path: &str) -> i32 {
 /// A `T.VoidResult` answer, in the shell's own "✎ verb target" line.
 fn void_verb(app: &mut App, verb: &str, target: &str, bytes: &[u8]) -> i32 {
     let Some((json_text, human_text)) =
-        tp::with_root::<crate::schema::types_capnp::void_result::Owned, _, _>(bytes, |r| {
+        tp::with_root::<smart_protocol::schema::types_capnp::void_result::Owned, _, _>(bytes, |r| {
             match r.which() {
-                Ok(crate::schema::types_capnp::void_result::Which::Success(_)) => (
+                Ok(smart_protocol::schema::types_capnp::void_result::Which::Success(_)) => (
                     format!("{{\"verb\":\"{verb}\",\"target\":\"{target}\",\"changed\":true}}"),
                     format!(
                         "  {} {} {} {}",
@@ -2980,7 +2980,7 @@ fn void_verb(app: &mut App, verb: &str, target: &str, bytes: &[u8]) -> i32 {
                         domain::dim(app, "— the engine's own host-mutating path, accepted")
                     ),
                 ),
-                Ok(crate::schema::types_capnp::void_result::Which::Error(Ok(error))) => {
+                Ok(smart_protocol::schema::types_capnp::void_result::Which::Error(Ok(error))) => {
                     let reason = text(error.get_message());
                     (
                         format!("{{\"verb\":\"{verb}\",\"error\":\"{reason}\"}}"),
@@ -3075,7 +3075,7 @@ fn file_event_token(kind: core::result::Result<FileEventType, capnp::NotInSchema
 }
 
 /// A mime type, as the contract spells it.
-fn mime_of(mime: &capnp::Result<crate::schema::types_capnp::mime_type::Reader<'_>>) -> String {
+fn mime_of(mime: &capnp::Result<smart_protocol::schema::types_capnp::mime_type::Reader<'_>>) -> String {
     match mime {
         Ok(mime) => {
             let kind = text(mime.get_type());
@@ -3091,7 +3091,7 @@ fn mime_of(mime: &capnp::Result<crate::schema::types_capnp::mime_type::Reader<'_
 }
 
 /// A hash output, as the contract spells it.
-fn hash_of(hash: &capnp::Result<crate::schema::types_capnp::hash_output::Reader<'_>>) -> String {
+fn hash_of(hash: &capnp::Result<smart_protocol::schema::types_capnp::hash_output::Reader<'_>>) -> String {
     match hash {
         Ok(hash) => hash_reader(hash),
         Err(_) => String::new(),
@@ -3099,7 +3099,7 @@ fn hash_of(hash: &capnp::Result<crate::schema::types_capnp::hash_output::Reader<
 }
 
 /// A hash output, as the contract spells it.
-fn hash_reader(hash: &crate::schema::types_capnp::hash_output::Reader<'_>) -> String {
+fn hash_reader(hash: &smart_protocol::schema::types_capnp::hash_output::Reader<'_>) -> String {
     // The contract's `HashOutput.algorithm` is still an ordinal (the tree's
     // other algorithm vocabularies moved to open tokens): it is printed as
     // the number the contract carries, never guessed into a name.
@@ -3131,7 +3131,7 @@ fn decode_hex(text: &str) -> Vec<u8> {
 }
 
 /// A timestamp, as the contract-shaped JSON.
-fn timestamp(out: &mut String, stamp: &capnp::Result<crate::schema::types_capnp::timestamp::Reader<'_>>) {
+fn timestamp(out: &mut String, stamp: &capnp::Result<smart_protocol::schema::types_capnp::timestamp::Reader<'_>>) {
     let mut o = json::Obj::new(out);
     o.key("nanoseconds")
         .int(stamp.as_ref().map(|s| s.get_nanoseconds()).unwrap_or(0));
@@ -3139,7 +3139,7 @@ fn timestamp(out: &mut String, stamp: &capnp::Result<crate::schema::types_capnp:
 }
 
 /// A timestamp, in the shell's civil spelling.
-fn stamp_label(stamp: &capnp::Result<crate::schema::types_capnp::timestamp::Reader<'_>>) -> String {
+fn stamp_label(stamp: &capnp::Result<smart_protocol::schema::types_capnp::timestamp::Reader<'_>>) -> String {
     let nanos = stamp.as_ref().map(|s| s.get_nanoseconds()).unwrap_or(0);
     if nanos == 0 {
         return "—".to_string();
