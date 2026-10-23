@@ -10,17 +10,17 @@
 // capability → permissionDenied). No CLI code is involved.
 //
 // The call model is the CONTRACT'S OWN: the interface id and the method id
-// come from the generated tables (`smart_cli::contract`), the subscription is
+// come from the generated tables (`smart_protocol::contract`), the subscription is
 // the contract's own capability, and the transport speaks capnp RPC.
 
-use smart_cli::schema::network_capnp::network as wire;
+use smart_protocol::schema::network_capnp::network as wire;
 use smart_cli::transport::{CallError, Connection, Endpoint, Subscription, with_root};
 
 /// The interface id and the method id of one network method — both GENERATED.
 fn ids(method: &str) -> (u64, u16) {
-    let info = smart_cli::contract::interface_named("Network")
+    let info = smart_protocol::contract::interface_named("Network")
         .expect("the network interface is compiled into this build");
-    let method_id = smart_cli::contract::method_id(info.stem, info.name, method)
+    let method_id = smart_protocol::contract::method_id(info.stem, info.name, method)
         .expect("the network interface declares that method");
     (info.type_id, method_id)
 }

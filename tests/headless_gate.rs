@@ -36,7 +36,7 @@ fn headless_example_source_links_no_command_surface() {
     // The scenario uses ONLY the contract client core: the transport, the
     // contract's own generated bindings, and the contract's own call model.
     assert!(scenario.contains("smart_cli::transport"));
-    assert!(scenario.contains("smart_cli::schema"));
+    assert!(scenario.contains("smart_protocol::schema"));
     // The second wire vocabulary is GONE: the headless path speaks the
     // contract's own call model, so no frame codec may be linked.
     assert!(

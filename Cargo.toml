@@ -124,6 +124,12 @@ cmd-manifest = ["smart-protocol/schema-manifest", "std"]
 cmd-vcard = ["smart-protocol/schema-vcard", "std"]
 cmd-content = ["smart-protocol/schema-content", "std"]
 
+[build-dependencies]
+capnpc = "0.27.0"
+
+[dev-dependencies]
+smart-protocol = { path = "../smart-protocol-rs" }
+
 [dependencies]
 # The contract: generated capnp bindings (schema + contract lookups) from
 # smart-protocol-rs, which owns the build.rs codegen. smart-cli no longer has

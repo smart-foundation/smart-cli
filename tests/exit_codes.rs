@@ -92,7 +92,7 @@ fn exit_4_when_the_capability_is_not_held() {
 #[test]
 fn the_exit_code_mapping_is_total_over_the_error_classes() {
     use smart_cli::registry;
-    use smart_cli::schema::types_capnp::ErrorCode;
+    use smart_protocol::schema::types_capnp::ErrorCode;
     use smart_cli::transport::{CallError, ServiceError};
 
     let service = |code: ErrorCode| {

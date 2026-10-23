@@ -27,7 +27,7 @@ static GLOBAL: Counting = Counting;
 
 /// Build + serialize a get_status result with many populated fields.
 fn status_bytes() -> Vec<u8> {
-    use smart_cli::schema::network_capnp::network as w;
+    use smart_protocol::schema::network_capnp::network as w;
     let mut message = capnp::message::Builder::new_default();
     {
         let mut r = message.init_root::<w::get_status_results::Builder<'_>>();
@@ -55,7 +55,7 @@ fn json_emission_borrows_and_performs_no_per_field_allocation() {
     let bytes = status_bytes();
     // Parse (this allocates, but NOT in the window we measure).
     let reader = smart_cli::transport::decode_message::<
-        smart_cli::schema::network_capnp::network::get_status_results::Owned,
+        smart_protocol::schema::network_capnp::network::get_status_results::Owned,
     >(&bytes)
     .unwrap();
     let root = reader.get().unwrap();

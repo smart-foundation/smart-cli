@@ -27,8 +27,8 @@ use capnp_rpc::twoparty;
 use capnp_rpc::RpcSystem;
 use futures::executor::LocalPool;
 
-use smart_cli::schema::capability_capnp::Operation;
-use smart_cli::schema::{abi_capnp, cli_capnp, types_capnp};
+use smart_protocol::schema::capability_capnp::Operation;
+use smart_protocol::schema::{abi_capnp, cli_capnp, types_capnp};
 
 /// The FIXTURE schema's generated bindings: a schema the CLI library never
 /// compiles (the mock compiles it for itself, the way a service compiles its
@@ -36,7 +36,7 @@ use smart_cli::schema::{abi_capnp, cli_capnp, types_capnp};
 #[allow(unused_imports)]
 use crate::support::fixture::fixture_capnp as fixture;
 #[cfg(feature = "schema-network")]
-use smart_cli::schema::network_capnp;
+use smart_protocol::schema::network_capnp;
 
 static COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -397,55 +397,55 @@ fn bootstrap(cfg: Cfg) -> capnp::capability::Client {
     {
         // The capability service: what this service HOLDS, published by the
         // service itself (the client asks; it does not assume).
-        let client: smart_cli::schema::capability_capnp::capability_service::Client =
+        let client: smart_protocol::schema::capability_capnp::capability_service::Client =
             capnp_rpc::new_client(CapabilityServer { cfg: cfg.clone() });
         routes.push(Route {
-            interface_id: smart_cli::schema::capability_capnp::capability_service::Client::TYPE_ID,
+            interface_id: smart_protocol::schema::capability_capnp::capability_service::Client::TYPE_ID,
             hook: client.into_client_hook(),
         });
     }
     #[cfg(feature = "schema-dns")]
     {
-        let client: smart_cli::schema::dns_capnp::dns_service::Client =
+        let client: smart_protocol::schema::dns_capnp::dns_service::Client =
             capnp_rpc::new_client(DnsServer { cfg: cfg.clone() });
         routes.push(Route {
-            interface_id: smart_cli::schema::dns_capnp::dns_service::Client::TYPE_ID,
+            interface_id: smart_protocol::schema::dns_capnp::dns_service::Client::TYPE_ID,
             hook: client.into_client_hook(),
         });
     }
     #[cfg(feature = "schema-socket")]
     {
-        let client: smart_cli::schema::socket_capnp::socket_service::Client =
+        let client: smart_protocol::schema::socket_capnp::socket_service::Client =
             capnp_rpc::new_client(SocketServer { cfg: cfg.clone() });
         routes.push(Route {
-            interface_id: smart_cli::schema::socket_capnp::socket_service::Client::TYPE_ID,
+            interface_id: smart_protocol::schema::socket_capnp::socket_service::Client::TYPE_ID,
             hook: client.into_client_hook(),
         });
     }
     #[cfg(feature = "schema-bluetooth")]
     {
-        let client: smart_cli::schema::bluetooth_capnp::bluetooth_service::Client =
+        let client: smart_protocol::schema::bluetooth_capnp::bluetooth_service::Client =
             capnp_rpc::new_client(BluetoothServer { cfg: cfg.clone() });
         routes.push(Route {
-            interface_id: smart_cli::schema::bluetooth_capnp::bluetooth_service::Client::TYPE_ID,
+            interface_id: smart_protocol::schema::bluetooth_capnp::bluetooth_service::Client::TYPE_ID,
             hook: client.into_client_hook(),
         });
     }
     #[cfg(feature = "schema-tunnel")]
     {
-        let client: smart_cli::schema::tunnel_capnp::tunnel_service::Client =
+        let client: smart_protocol::schema::tunnel_capnp::tunnel_service::Client =
             capnp_rpc::new_client(TunnelServer { cfg: cfg.clone() });
         routes.push(Route {
-            interface_id: smart_cli::schema::tunnel_capnp::tunnel_service::Client::TYPE_ID,
+            interface_id: smart_protocol::schema::tunnel_capnp::tunnel_service::Client::TYPE_ID,
             hook: client.into_client_hook(),
         });
     }
     #[cfg(feature = "schema-web")]
     {
-        let client: smart_cli::schema::web_capnp::web_service::Client =
+        let client: smart_protocol::schema::web_capnp::web_service::Client =
             capnp_rpc::new_client(WebServer { cfg: cfg.clone() });
         routes.push(Route {
-            interface_id: smart_cli::schema::web_capnp::web_service::Client::TYPE_ID,
+            interface_id: smart_protocol::schema::web_capnp::web_service::Client::TYPE_ID,
             hook: client.into_client_hook(),
         });
     }
@@ -463,10 +463,10 @@ fn bootstrap(cfg: Cfg) -> capnp::capability::Client {
     }
     #[cfg(feature = "schema-discovery")]
     {
-        let client: smart_cli::schema::discovery_capnp::discovery::Client =
+        let client: smart_protocol::schema::discovery_capnp::discovery::Client =
             capnp_rpc::new_client(DiscoveryServer { cfg: cfg.clone() });
         routes.push(Route {
-            interface_id: smart_cli::schema::discovery_capnp::discovery::Client::TYPE_ID,
+            interface_id: smart_protocol::schema::discovery_capnp::discovery::Client::TYPE_ID,
             hook: client.into_client_hook(),
         });
     }
@@ -474,55 +474,55 @@ fn bootstrap(cfg: Cfg) -> capnp::capability::Client {
     // server traits, the same router, the same contract.
     #[cfg(feature = "schema-files")]
     {
-        let client: smart_cli::schema::files_capnp::files::Client =
+        let client: smart_protocol::schema::files_capnp::files::Client =
             capnp_rpc::new_client(crate::support::domains::FilesServer { cfg: cfg.clone() });
         routes.push(Route {
-            interface_id: smart_cli::schema::files_capnp::files::Client::TYPE_ID,
+            interface_id: smart_protocol::schema::files_capnp::files::Client::TYPE_ID,
             hook: client.into_client_hook(),
         });
     }
     #[cfg(feature = "schema-process")]
     {
-        let client: smart_cli::schema::process_capnp::process::Client =
+        let client: smart_protocol::schema::process_capnp::process::Client =
             capnp_rpc::new_client(crate::support::domains::ProcessServer { cfg: cfg.clone() });
         routes.push(Route {
-            interface_id: smart_cli::schema::process_capnp::process::Client::TYPE_ID,
+            interface_id: smart_protocol::schema::process_capnp::process::Client::TYPE_ID,
             hook: client.into_client_hook(),
         });
     }
     #[cfg(feature = "schema-settings")]
     {
-        let client: smart_cli::schema::settings_capnp::settings::Client =
+        let client: smart_protocol::schema::settings_capnp::settings::Client =
             capnp_rpc::new_client(crate::support::domains::SettingsServer { cfg: cfg.clone() });
         routes.push(Route {
-            interface_id: smart_cli::schema::settings_capnp::settings::Client::TYPE_ID,
+            interface_id: smart_protocol::schema::settings_capnp::settings::Client::TYPE_ID,
             hook: client.into_client_hook(),
         });
     }
     #[cfg(feature = "schema-logging")]
     {
-        let client: smart_cli::schema::logging_capnp::logging::Client =
+        let client: smart_protocol::schema::logging_capnp::logging::Client =
             capnp_rpc::new_client(crate::support::domains::LoggingServer { cfg: cfg.clone() });
         routes.push(Route {
-            interface_id: smart_cli::schema::logging_capnp::logging::Client::TYPE_ID,
+            interface_id: smart_protocol::schema::logging_capnp::logging::Client::TYPE_ID,
             hook: client.into_client_hook(),
         });
     }
     #[cfg(feature = "schema-clock")]
     {
-        let client: smart_cli::schema::clock_capnp::clock_service::Client =
+        let client: smart_protocol::schema::clock_capnp::clock_service::Client =
             capnp_rpc::new_client(crate::support::domains::ClockServer { cfg: cfg.clone() });
         routes.push(Route {
-            interface_id: smart_cli::schema::clock_capnp::clock_service::Client::TYPE_ID,
+            interface_id: smart_protocol::schema::clock_capnp::clock_service::Client::TYPE_ID,
             hook: client.into_client_hook(),
         });
     }
     #[cfg(feature = "schema-time")]
     {
-        let client: smart_cli::schema::time_capnp::time::Client =
+        let client: smart_protocol::schema::time_capnp::time::Client =
             capnp_rpc::new_client(crate::support::domains::TimeServer { cfg: cfg.clone() });
         routes.push(Route {
-            interface_id: smart_cli::schema::time_capnp::time::Client::TYPE_ID,
+            interface_id: smart_protocol::schema::time_capnp::time::Client::TYPE_ID,
             hook: client.into_client_hook(),
         });
     }
@@ -637,17 +637,17 @@ struct CapabilityServer {
     cfg: Cfg,
 }
 
-impl smart_cli::schema::capability_capnp::capability_service::Server for CapabilityServer {
+impl smart_protocol::schema::capability_capnp::capability_service::Server for CapabilityServer {
     fn list(
         self: Rc<Self>,
-        _params: smart_cli::schema::capability_capnp::capability_service::ListParams,
-        results: smart_cli::schema::capability_capnp::capability_service::ListResults,
+        _params: smart_protocol::schema::capability_capnp::capability_service::ListParams,
+        results: smart_protocol::schema::capability_capnp::capability_service::ListResults,
     ) -> impl std::future::Future<Output = Result<(), capnp::Error>> + 'static {
         self.cfg.state.requests.fetch_add(1, Ordering::SeqCst);
         let control = self.cfg.control;
         let mut message = capnp::message::Builder::new_default();
         {
-            use smart_cli::schema::capability_capnp::capability_service as w;
+            use smart_protocol::schema::capability_capnp::capability_service as w;
             let mut r = message.init_root::<w::list_results::Builder<'_>>();
             let mut list = r.reborrow().init_caps(1);
             let mut capability = list.reborrow().get(0);
@@ -808,8 +808,8 @@ struct PublishedCommand {
 /// compiles), the tree the mock publishes carries it — the same tree a
 /// client reads.
 fn method_ordinal(interface: &str, method: &str) -> Option<u16> {
-    if let Some(info) = smart_cli::contract::interface_named(interface) {
-        if let Some(id) = smart_cli::contract::method_id(info.stem, info.name, method) {
+    if let Some(info) = smart_protocol::contract::interface_named(interface) {
+        if let Some(id) = smart_protocol::contract::method_id(info.stem, info.name, method) {
             return Some(id);
         }
     }
@@ -858,7 +858,7 @@ fn published_commands(_unavailable: &[String]) -> Vec<PublishedCommand> {
     // service publishes, the identity the CONTRACT gives them.
     #[cfg(feature = "schema-files")]
     {
-        let id = smart_cli::contract::schema_id("files").unwrap_or(0);
+        let id = smart_protocol::contract::schema_id("files").unwrap_or(0);
         for (path, method, summary) in [
             ("files ls", "listDirectory", "the directory's own entries"),
             ("files find", "searchFiles", "the paths matching a glob"),
@@ -931,7 +931,7 @@ fn published_commands(_unavailable: &[String]) -> Vec<PublishedCommand> {
     }
     #[cfg(feature = "schema-process")]
     {
-        let id = smart_cli::contract::schema_id("process").unwrap_or(0);
+        let id = smart_protocol::contract::schema_id("process").unwrap_or(0);
         for (path, method, summary) in [
             ("process list", "listProcesses", "the kernel's own enumeration"),
             ("process inspect", "getProcess", "one process's own reading"),
@@ -974,7 +974,7 @@ fn published_commands(_unavailable: &[String]) -> Vec<PublishedCommand> {
     }
     #[cfg(feature = "schema-settings")]
     {
-        let id = smart_cli::contract::schema_id("settings").unwrap_or(0);
+        let id = smart_protocol::contract::schema_id("settings").unwrap_or(0);
         for (path, method, summary) in [
             ("settings domains", "listDomains", "the schema source the host publishes"),
             ("settings list", "getAll", "one domain's live values"),
@@ -1007,7 +1007,7 @@ fn published_commands(_unavailable: &[String]) -> Vec<PublishedCommand> {
     }
     #[cfg(feature = "schema-logging")]
     {
-        let id = smart_cli::contract::schema_id("logging").unwrap_or(0);
+        let id = smart_protocol::contract::schema_id("logging").unwrap_or(0);
         for (path, method, summary) in [
             ("logging sinks", "listDomains", "the sinks this host has, and each one's level"),
             ("logging domains", "listDomains", "the log domains this host serves"),
@@ -1033,7 +1033,7 @@ fn published_commands(_unavailable: &[String]) -> Vec<PublishedCommand> {
     }
     #[cfg(feature = "schema-clock")]
     {
-        let id = smart_cli::contract::schema_id("clock").unwrap_or(0);
+        let id = smart_protocol::contract::schema_id("clock").unwrap_or(0);
         for (path, method, summary) in [
             ("clock info", "info", "the measured state of this host's clocks"),
             ("clock now", "realtimeNow", "the host's own CLOCK_REALTIME"),
@@ -1065,7 +1065,7 @@ fn published_commands(_unavailable: &[String]) -> Vec<PublishedCommand> {
     }
     #[cfg(feature = "schema-time")]
     {
-        let id = smart_cli::contract::schema_id("time").unwrap_or(0);
+        let id = smart_protocol::contract::schema_id("time").unwrap_or(0);
         for (path, method, summary) in [
             ("time now", "getDateTime", "the host's own wall clock"),
             ("time cal", "convertCalendar", "the arithmetic calendars"),
@@ -1576,11 +1576,11 @@ struct DnsServer {
 }
 
 #[cfg(feature = "schema-dns")]
-impl smart_cli::schema::dns_capnp::dns_service::Server for DnsServer {
+impl smart_protocol::schema::dns_capnp::dns_service::Server for DnsServer {
     fn resolve(
         self: Rc<Self>,
-        _params: smart_cli::schema::dns_capnp::dns_service::ResolveParams,
-        results: smart_cli::schema::dns_capnp::dns_service::ResolveResults,
+        _params: smart_protocol::schema::dns_capnp::dns_service::ResolveParams,
+        results: smart_protocol::schema::dns_capnp::dns_service::ResolveResults,
     ) -> impl std::future::Future<Output = Result<(), capnp::Error>> + 'static {
         self.cfg.state.requests.fetch_add(1, Ordering::SeqCst);
         fill(&dns_resolve_msg(), results);
@@ -1589,8 +1589,8 @@ impl smart_cli::schema::dns_capnp::dns_service::Server for DnsServer {
 
     fn reverse_resolve(
         self: Rc<Self>,
-        _params: smart_cli::schema::dns_capnp::dns_service::ReverseResolveParams,
-        results: smart_cli::schema::dns_capnp::dns_service::ReverseResolveResults,
+        _params: smart_protocol::schema::dns_capnp::dns_service::ReverseResolveParams,
+        results: smart_protocol::schema::dns_capnp::dns_service::ReverseResolveResults,
     ) -> impl std::future::Future<Output = Result<(), capnp::Error>> + 'static {
         self.cfg.state.requests.fetch_add(1, Ordering::SeqCst);
         fill(&dns_reverse_msg(), results);
@@ -1599,8 +1599,8 @@ impl smart_cli::schema::dns_capnp::dns_service::Server for DnsServer {
 
     fn resolve_batch(
         self: Rc<Self>,
-        _params: smart_cli::schema::dns_capnp::dns_service::ResolveBatchParams,
-        results: smart_cli::schema::dns_capnp::dns_service::ResolveBatchResults,
+        _params: smart_protocol::schema::dns_capnp::dns_service::ResolveBatchParams,
+        results: smart_protocol::schema::dns_capnp::dns_service::ResolveBatchResults,
     ) -> impl std::future::Future<Output = Result<(), capnp::Error>> + 'static {
         self.cfg.state.requests.fetch_add(1, Ordering::SeqCst);
         fill(&dns_batch_msg(), results);
@@ -1609,8 +1609,8 @@ impl smart_cli::schema::dns_capnp::dns_service::Server for DnsServer {
 
     fn get_cache_stats(
         self: Rc<Self>,
-        _params: smart_cli::schema::dns_capnp::dns_service::GetCacheStatsParams,
-        results: smart_cli::schema::dns_capnp::dns_service::GetCacheStatsResults,
+        _params: smart_protocol::schema::dns_capnp::dns_service::GetCacheStatsParams,
+        results: smart_protocol::schema::dns_capnp::dns_service::GetCacheStatsResults,
     ) -> impl std::future::Future<Output = Result<(), capnp::Error>> + 'static {
         self.cfg.state.requests.fetch_add(1, Ordering::SeqCst);
         fill(&dns_cache_stats_msg(), results);
@@ -1619,8 +1619,8 @@ impl smart_cli::schema::dns_capnp::dns_service::Server for DnsServer {
 
     fn get_config(
         self: Rc<Self>,
-        _params: smart_cli::schema::dns_capnp::dns_service::GetConfigParams,
-        results: smart_cli::schema::dns_capnp::dns_service::GetConfigResults,
+        _params: smart_protocol::schema::dns_capnp::dns_service::GetConfigParams,
+        results: smart_protocol::schema::dns_capnp::dns_service::GetConfigResults,
     ) -> impl std::future::Future<Output = Result<(), capnp::Error>> + 'static {
         self.cfg.state.requests.fetch_add(1, Ordering::SeqCst);
         fill(&dns_config_msg(), results);
@@ -1629,8 +1629,8 @@ impl smart_cli::schema::dns_capnp::dns_service::Server for DnsServer {
 
     fn flush_cache(
         self: Rc<Self>,
-        _params: smart_cli::schema::dns_capnp::dns_service::FlushCacheParams,
-        results: smart_cli::schema::dns_capnp::dns_service::FlushCacheResults,
+        _params: smart_protocol::schema::dns_capnp::dns_service::FlushCacheParams,
+        results: smart_protocol::schema::dns_capnp::dns_service::FlushCacheResults,
     ) -> impl std::future::Future<Output = Result<(), capnp::Error>> + 'static {
         self.cfg.state.requests.fetch_add(1, Ordering::SeqCst);
         fill(&void_ok_msg(), results);
@@ -1645,11 +1645,11 @@ struct SocketServer {
 }
 
 #[cfg(feature = "schema-socket")]
-impl smart_cli::schema::socket_capnp::socket_service::Server for SocketServer {
+impl smart_protocol::schema::socket_capnp::socket_service::Server for SocketServer {
     fn create(
         self: Rc<Self>,
-        _params: smart_cli::schema::socket_capnp::socket_service::CreateParams,
-        results: smart_cli::schema::socket_capnp::socket_service::CreateResults,
+        _params: smart_protocol::schema::socket_capnp::socket_service::CreateParams,
+        results: smart_protocol::schema::socket_capnp::socket_service::CreateResults,
     ) -> impl std::future::Future<Output = Result<(), capnp::Error>> + 'static {
         self.cfg.state.requests.fetch_add(1, Ordering::SeqCst);
         fill(&socket_create_msg(), results);
@@ -1658,8 +1658,8 @@ impl smart_cli::schema::socket_capnp::socket_service::Server for SocketServer {
 
     fn get_info(
         self: Rc<Self>,
-        _params: smart_cli::schema::socket_capnp::socket_service::GetInfoParams,
-        results: smart_cli::schema::socket_capnp::socket_service::GetInfoResults,
+        _params: smart_protocol::schema::socket_capnp::socket_service::GetInfoParams,
+        results: smart_protocol::schema::socket_capnp::socket_service::GetInfoResults,
     ) -> impl std::future::Future<Output = Result<(), capnp::Error>> + 'static {
         self.cfg.state.requests.fetch_add(1, Ordering::SeqCst);
         fill(&socket_info_msg(), results);
@@ -1668,8 +1668,8 @@ impl smart_cli::schema::socket_capnp::socket_service::Server for SocketServer {
 
     fn get_socket_name(
         self: Rc<Self>,
-        _params: smart_cli::schema::socket_capnp::socket_service::GetSocketNameParams,
-        results: smart_cli::schema::socket_capnp::socket_service::GetSocketNameResults,
+        _params: smart_protocol::schema::socket_capnp::socket_service::GetSocketNameParams,
+        results: smart_protocol::schema::socket_capnp::socket_service::GetSocketNameResults,
     ) -> impl std::future::Future<Output = Result<(), capnp::Error>> + 'static {
         self.cfg.state.requests.fetch_add(1, Ordering::SeqCst);
         fill(&socket_name_msg(), results);
@@ -1678,8 +1678,8 @@ impl smart_cli::schema::socket_capnp::socket_service::Server for SocketServer {
 
     fn close(
         self: Rc<Self>,
-        _params: smart_cli::schema::socket_capnp::socket_service::CloseParams,
-        results: smart_cli::schema::socket_capnp::socket_service::CloseResults,
+        _params: smart_protocol::schema::socket_capnp::socket_service::CloseParams,
+        results: smart_protocol::schema::socket_capnp::socket_service::CloseResults,
     ) -> impl std::future::Future<Output = Result<(), capnp::Error>> + 'static {
         self.cfg.state.requests.fetch_add(1, Ordering::SeqCst);
         fill(&void_ok_msg(), results);
@@ -1694,11 +1694,11 @@ struct BluetoothServer {
 }
 
 #[cfg(feature = "schema-bluetooth")]
-impl smart_cli::schema::bluetooth_capnp::bluetooth_service::Server for BluetoothServer {
+impl smart_protocol::schema::bluetooth_capnp::bluetooth_service::Server for BluetoothServer {
     fn get_state(
         self: Rc<Self>,
-        _params: smart_cli::schema::bluetooth_capnp::bluetooth_service::GetStateParams,
-        results: smart_cli::schema::bluetooth_capnp::bluetooth_service::GetStateResults,
+        _params: smart_protocol::schema::bluetooth_capnp::bluetooth_service::GetStateParams,
+        results: smart_protocol::schema::bluetooth_capnp::bluetooth_service::GetStateResults,
     ) -> impl std::future::Future<Output = Result<(), capnp::Error>> + 'static {
         self.cfg.state.requests.fetch_add(1, Ordering::SeqCst);
         fill(&bluetooth_state_msg(), results);
@@ -1707,8 +1707,8 @@ impl smart_cli::schema::bluetooth_capnp::bluetooth_service::Server for Bluetooth
 
     fn get_name(
         self: Rc<Self>,
-        _params: smart_cli::schema::bluetooth_capnp::bluetooth_service::GetNameParams,
-        results: smart_cli::schema::bluetooth_capnp::bluetooth_service::GetNameResults,
+        _params: smart_protocol::schema::bluetooth_capnp::bluetooth_service::GetNameParams,
+        results: smart_protocol::schema::bluetooth_capnp::bluetooth_service::GetNameResults,
     ) -> impl std::future::Future<Output = Result<(), capnp::Error>> + 'static {
         self.cfg.state.requests.fetch_add(1, Ordering::SeqCst);
         fill(&bluetooth_name_msg(), results);
@@ -1717,8 +1717,8 @@ impl smart_cli::schema::bluetooth_capnp::bluetooth_service::Server for Bluetooth
 
     fn get_paired_devices(
         self: Rc<Self>,
-        _params: smart_cli::schema::bluetooth_capnp::bluetooth_service::GetPairedDevicesParams,
-        results: smart_cli::schema::bluetooth_capnp::bluetooth_service::GetPairedDevicesResults,
+        _params: smart_protocol::schema::bluetooth_capnp::bluetooth_service::GetPairedDevicesParams,
+        results: smart_protocol::schema::bluetooth_capnp::bluetooth_service::GetPairedDevicesResults,
     ) -> impl std::future::Future<Output = Result<(), capnp::Error>> + 'static {
         self.cfg.state.requests.fetch_add(1, Ordering::SeqCst);
         fill(&bluetooth_devices_msg(), results);
@@ -1727,8 +1727,8 @@ impl smart_cli::schema::bluetooth_capnp::bluetooth_service::Server for Bluetooth
 
     fn enable(
         self: Rc<Self>,
-        _params: smart_cli::schema::bluetooth_capnp::bluetooth_service::EnableParams,
-        results: smart_cli::schema::bluetooth_capnp::bluetooth_service::EnableResults,
+        _params: smart_protocol::schema::bluetooth_capnp::bluetooth_service::EnableParams,
+        results: smart_protocol::schema::bluetooth_capnp::bluetooth_service::EnableResults,
     ) -> impl std::future::Future<Output = Result<(), capnp::Error>> + 'static {
         self.cfg.state.requests.fetch_add(1, Ordering::SeqCst);
         if self.cfg.control {
@@ -1741,8 +1741,8 @@ impl smart_cli::schema::bluetooth_capnp::bluetooth_service::Server for Bluetooth
 
     fn disable(
         self: Rc<Self>,
-        _params: smart_cli::schema::bluetooth_capnp::bluetooth_service::DisableParams,
-        results: smart_cli::schema::bluetooth_capnp::bluetooth_service::DisableResults,
+        _params: smart_protocol::schema::bluetooth_capnp::bluetooth_service::DisableParams,
+        results: smart_protocol::schema::bluetooth_capnp::bluetooth_service::DisableResults,
     ) -> impl std::future::Future<Output = Result<(), capnp::Error>> + 'static {
         self.cfg.state.requests.fetch_add(1, Ordering::SeqCst);
         if self.cfg.control {
@@ -1755,8 +1755,8 @@ impl smart_cli::schema::bluetooth_capnp::bluetooth_service::Server for Bluetooth
 
     fn set_name(
         self: Rc<Self>,
-        _params: smart_cli::schema::bluetooth_capnp::bluetooth_service::SetNameParams,
-        results: smart_cli::schema::bluetooth_capnp::bluetooth_service::SetNameResults,
+        _params: smart_protocol::schema::bluetooth_capnp::bluetooth_service::SetNameParams,
+        results: smart_protocol::schema::bluetooth_capnp::bluetooth_service::SetNameResults,
     ) -> impl std::future::Future<Output = Result<(), capnp::Error>> + 'static {
         self.cfg.state.requests.fetch_add(1, Ordering::SeqCst);
         if self.cfg.control {
@@ -1775,11 +1775,11 @@ struct TunnelServer {
 }
 
 #[cfg(feature = "schema-tunnel")]
-impl smart_cli::schema::tunnel_capnp::tunnel_service::Server for TunnelServer {
+impl smart_protocol::schema::tunnel_capnp::tunnel_service::Server for TunnelServer {
     fn open(
         self: Rc<Self>,
-        _params: smart_cli::schema::tunnel_capnp::tunnel_service::OpenParams,
-        results: smart_cli::schema::tunnel_capnp::tunnel_service::OpenResults,
+        _params: smart_protocol::schema::tunnel_capnp::tunnel_service::OpenParams,
+        results: smart_protocol::schema::tunnel_capnp::tunnel_service::OpenResults,
     ) -> impl std::future::Future<Output = Result<(), capnp::Error>> + 'static {
         self.cfg.state.requests.fetch_add(1, Ordering::SeqCst);
         fill(&tunnel_open_msg(), results);
@@ -1788,8 +1788,8 @@ impl smart_cli::schema::tunnel_capnp::tunnel_service::Server for TunnelServer {
 
     fn get_info(
         self: Rc<Self>,
-        _params: smart_cli::schema::tunnel_capnp::tunnel_service::GetInfoParams,
-        results: smart_cli::schema::tunnel_capnp::tunnel_service::GetInfoResults,
+        _params: smart_protocol::schema::tunnel_capnp::tunnel_service::GetInfoParams,
+        results: smart_protocol::schema::tunnel_capnp::tunnel_service::GetInfoResults,
     ) -> impl std::future::Future<Output = Result<(), capnp::Error>> + 'static {
         self.cfg.state.requests.fetch_add(1, Ordering::SeqCst);
         fill(&tunnel_info_msg(), results);
@@ -1798,8 +1798,8 @@ impl smart_cli::schema::tunnel_capnp::tunnel_service::Server for TunnelServer {
 
     fn close(
         self: Rc<Self>,
-        _params: smart_cli::schema::tunnel_capnp::tunnel_service::CloseParams,
-        results: smart_cli::schema::tunnel_capnp::tunnel_service::CloseResults,
+        _params: smart_protocol::schema::tunnel_capnp::tunnel_service::CloseParams,
+        results: smart_protocol::schema::tunnel_capnp::tunnel_service::CloseResults,
     ) -> impl std::future::Future<Output = Result<(), capnp::Error>> + 'static {
         self.cfg.state.requests.fetch_add(1, Ordering::SeqCst);
         if self.cfg.control {
@@ -1818,11 +1818,11 @@ struct WebServer {
 }
 
 #[cfg(feature = "schema-web")]
-impl smart_cli::schema::web_capnp::web_service::Server for WebServer {
+impl smart_protocol::schema::web_capnp::web_service::Server for WebServer {
     fn fetch(
         self: Rc<Self>,
-        _params: smart_cli::schema::web_capnp::web_service::FetchParams,
-        results: smart_cli::schema::web_capnp::web_service::FetchResults,
+        _params: smart_protocol::schema::web_capnp::web_service::FetchParams,
+        results: smart_protocol::schema::web_capnp::web_service::FetchResults,
     ) -> impl std::future::Future<Output = Result<(), capnp::Error>> + 'static {
         self.cfg.state.requests.fetch_add(1, Ordering::SeqCst);
         fill(&web_fetch_msg(), results);
@@ -1831,8 +1831,8 @@ impl smart_cli::schema::web_capnp::web_service::Server for WebServer {
 
     fn resolve_url(
         self: Rc<Self>,
-        _params: smart_cli::schema::web_capnp::web_service::ResolveUrlParams,
-        results: smart_cli::schema::web_capnp::web_service::ResolveUrlResults,
+        _params: smart_protocol::schema::web_capnp::web_service::ResolveUrlParams,
+        results: smart_protocol::schema::web_capnp::web_service::ResolveUrlResults,
     ) -> impl std::future::Future<Output = Result<(), capnp::Error>> + 'static {
         self.cfg.state.requests.fetch_add(1, Ordering::SeqCst);
         fill(&web_resolve_msg(), results);
@@ -1847,11 +1847,11 @@ struct DiscoveryServer {
 }
 
 #[cfg(feature = "schema-discovery")]
-impl smart_cli::schema::discovery_capnp::discovery::Server for DiscoveryServer {
+impl smart_protocol::schema::discovery_capnp::discovery::Server for DiscoveryServer {
     fn lookup(
         self: Rc<Self>,
-        params: smart_cli::schema::discovery_capnp::discovery::LookupParams,
-        results: smart_cli::schema::discovery_capnp::discovery::LookupResults,
+        params: smart_protocol::schema::discovery_capnp::discovery::LookupParams,
+        results: smart_protocol::schema::discovery_capnp::discovery::LookupResults,
     ) -> impl std::future::Future<Output = Result<(), capnp::Error>> + 'static {
         self.cfg.state.requests.fetch_add(1, Ordering::SeqCst);
         // The lookup HONOURS the filter: this service publishes itself under
@@ -1876,8 +1876,8 @@ impl smart_cli::schema::discovery_capnp::discovery::Server for DiscoveryServer {
 
     fn resolve(
         self: Rc<Self>,
-        params: smart_cli::schema::discovery_capnp::discovery::ResolveParams,
-        results: smart_cli::schema::discovery_capnp::discovery::ResolveResults,
+        params: smart_protocol::schema::discovery_capnp::discovery::ResolveParams,
+        results: smart_protocol::schema::discovery_capnp::discovery::ResolveResults,
     ) -> impl std::future::Future<Output = Result<(), capnp::Error>> + 'static {
         self.cfg.state.requests.fetch_add(1, Ordering::SeqCst);
         let asked = params
@@ -2102,18 +2102,18 @@ fn vpn_list_msg() -> capnp::message::Builder<capnp::message::HeapAllocator> {
 
 #[cfg(feature = "schema-bluetooth")]
 fn bluetooth_state_msg() -> capnp::message::Builder<capnp::message::HeapAllocator> {
-    use smart_cli::schema::bluetooth_capnp::bluetooth_service as w;
+    use smart_protocol::schema::bluetooth_capnp::bluetooth_service as w;
     let mut m = capnp::message::Builder::new_default();
     {
         let mut r = m.init_root::<w::get_state_results::Builder<'_>>();
-        r.reborrow().set_state(smart_cli::schema::bluetooth_capnp::BluetoothState::On);
+        r.reborrow().set_state(smart_protocol::schema::bluetooth_capnp::BluetoothState::On);
     }
     m
 }
 
 #[cfg(feature = "schema-bluetooth")]
 fn bluetooth_name_msg() -> capnp::message::Builder<capnp::message::HeapAllocator> {
-    use smart_cli::schema::bluetooth_capnp::bluetooth_service as w;
+    use smart_protocol::schema::bluetooth_capnp::bluetooth_service as w;
     let mut m = capnp::message::Builder::new_default();
     {
         let mut r = m.init_root::<w::get_name_results::Builder<'_>>();
@@ -2124,7 +2124,7 @@ fn bluetooth_name_msg() -> capnp::message::Builder<capnp::message::HeapAllocator
 
 #[cfg(feature = "schema-bluetooth")]
 fn bluetooth_devices_msg() -> capnp::message::Builder<capnp::message::HeapAllocator> {
-    use smart_cli::schema::bluetooth_capnp::bluetooth_service as w;
+    use smart_protocol::schema::bluetooth_capnp::bluetooth_service as w;
     let mut m = capnp::message::Builder::new_default();
     {
         let mut r = m.init_root::<w::get_paired_devices_results::Builder<'_>>();
@@ -2138,7 +2138,7 @@ fn bluetooth_devices_msg() -> capnp::message::Builder<capnp::message::HeapAlloca
 
 #[cfg(feature = "schema-tunnel")]
 fn tunnel_open_msg() -> capnp::message::Builder<capnp::message::HeapAllocator> {
-    use smart_cli::schema::tunnel_capnp::tunnel_service as w;
+    use smart_protocol::schema::tunnel_capnp::tunnel_service as w;
     let mut m = capnp::message::Builder::new_default();
     {
         let mut r = m.init_root::<w::open_results::Builder<'_>>();
@@ -2150,7 +2150,7 @@ fn tunnel_open_msg() -> capnp::message::Builder<capnp::message::HeapAllocator> {
 
 #[cfg(feature = "schema-tunnel")]
 fn tunnel_info_msg() -> capnp::message::Builder<capnp::message::HeapAllocator> {
-    use smart_cli::schema::tunnel_capnp::tunnel_service as w;
+    use smart_protocol::schema::tunnel_capnp::tunnel_service as w;
     let mut m = capnp::message::Builder::new_default();
     {
         let mut r = m.init_root::<w::get_info_results::Builder<'_>>();
@@ -2164,7 +2164,7 @@ fn tunnel_info_msg() -> capnp::message::Builder<capnp::message::HeapAllocator> {
 
 #[cfg(feature = "schema-web")]
 fn web_fetch_msg() -> capnp::message::Builder<capnp::message::HeapAllocator> {
-    use smart_cli::schema::web_capnp::web_service as w;
+    use smart_protocol::schema::web_capnp::web_service as w;
     let mut m = capnp::message::Builder::new_default();
     {
         let mut r = m.init_root::<w::fetch_results::Builder<'_>>();
@@ -2177,7 +2177,7 @@ fn web_fetch_msg() -> capnp::message::Builder<capnp::message::HeapAllocator> {
 
 #[cfg(feature = "schema-web")]
 fn web_resolve_msg() -> capnp::message::Builder<capnp::message::HeapAllocator> {
-    use smart_cli::schema::web_capnp::web_service as w;
+    use smart_protocol::schema::web_capnp::web_service as w;
     let mut m = capnp::message::Builder::new_default();
     {
         let mut r = m.init_root::<w::resolve_url_results::Builder<'_>>();
@@ -2193,7 +2193,7 @@ fn web_resolve_msg() -> capnp::message::Builder<capnp::message::HeapAllocator> {
 /// for real and the client that reads them.
 #[cfg(feature = "schema-discovery")]
 fn write_metadata(
-    builder: &mut smart_cli::schema::types_capnp::string_map::Builder<'_>,
+    builder: &mut smart_protocol::schema::types_capnp::string_map::Builder<'_>,
     entries: &[(&str, &str)],
 ) {
     let mut map = builder.reborrow().init_entries(entries.len() as u32);
@@ -2208,7 +2208,7 @@ fn write_metadata(
 /// at, and the CALL MODEL it speaks.
 #[cfg(feature = "schema-discovery")]
 fn write_descriptor(
-    descriptor: &mut smart_cli::schema::discovery_capnp::service_descriptor::Builder<'_>,
+    descriptor: &mut smart_protocol::schema::discovery_capnp::service_descriptor::Builder<'_>,
     name: &str,
     cfg: &Cfg,
 ) {
@@ -2240,7 +2240,7 @@ fn discovery_lookup_msg(
     name: &str,
     cfg: &Cfg,
 ) -> capnp::message::Builder<capnp::message::HeapAllocator> {
-    use smart_cli::schema::discovery_capnp::discovery as w;
+    use smart_protocol::schema::discovery_capnp::discovery as w;
     let mut m = capnp::message::Builder::new_default();
     {
         let mut r = m.init_root::<w::lookup_results::Builder<'_>>();
@@ -2262,7 +2262,7 @@ fn discovery_resolve_msg(
     name: &str,
     cfg: &Cfg,
 ) -> capnp::message::Builder<capnp::message::HeapAllocator> {
-    use smart_cli::schema::discovery_capnp::discovery as w;
+    use smart_protocol::schema::discovery_capnp::discovery as w;
     let mut m = capnp::message::Builder::new_default();
     {
         let mut r = m.init_root::<w::resolve_results::Builder<'_>>();
@@ -2279,7 +2279,7 @@ fn discovery_resolve_msg(
 
 #[cfg(feature = "schema-dns")]
 fn dns_resolve_msg() -> capnp::message::Builder<capnp::message::HeapAllocator> {
-    use smart_cli::schema::dns_capnp::dns_service as w;
+    use smart_protocol::schema::dns_capnp::dns_service as w;
     let mut m = capnp::message::Builder::new_default();
     {
         let mut r = m.init_root::<w::resolve_results::Builder<'_>>();
@@ -2296,7 +2296,7 @@ fn dns_resolve_msg() -> capnp::message::Builder<capnp::message::HeapAllocator> {
 
 #[cfg(feature = "schema-dns")]
 fn dns_reverse_msg() -> capnp::message::Builder<capnp::message::HeapAllocator> {
-    use smart_cli::schema::dns_capnp::dns_service as w;
+    use smart_protocol::schema::dns_capnp::dns_service as w;
     let mut m = capnp::message::Builder::new_default();
     {
         let mut r = m.init_root::<w::reverse_resolve_results::Builder<'_>>();
@@ -2308,7 +2308,7 @@ fn dns_reverse_msg() -> capnp::message::Builder<capnp::message::HeapAllocator> {
 
 #[cfg(feature = "schema-dns")]
 fn dns_batch_msg() -> capnp::message::Builder<capnp::message::HeapAllocator> {
-    use smart_cli::schema::dns_capnp::dns_service as w;
+    use smart_protocol::schema::dns_capnp::dns_service as w;
     let mut m = capnp::message::Builder::new_default();
     {
         let mut r = m.init_root::<w::resolve_batch_results::Builder<'_>>();
@@ -2320,7 +2320,7 @@ fn dns_batch_msg() -> capnp::message::Builder<capnp::message::HeapAllocator> {
 
 #[cfg(feature = "schema-dns")]
 fn dns_cache_stats_msg() -> capnp::message::Builder<capnp::message::HeapAllocator> {
-    use smart_cli::schema::dns_capnp::dns_service as w;
+    use smart_protocol::schema::dns_capnp::dns_service as w;
     let mut m = capnp::message::Builder::new_default();
     {
         let mut r = m.init_root::<w::get_cache_stats_results::Builder<'_>>();
@@ -2334,7 +2334,7 @@ fn dns_cache_stats_msg() -> capnp::message::Builder<capnp::message::HeapAllocato
 
 #[cfg(feature = "schema-dns")]
 fn dns_config_msg() -> capnp::message::Builder<capnp::message::HeapAllocator> {
-    use smart_cli::schema::dns_capnp::dns_service as w;
+    use smart_protocol::schema::dns_capnp::dns_service as w;
     let mut m = capnp::message::Builder::new_default();
     {
         let mut r = m.init_root::<w::get_config_results::Builder<'_>>();
@@ -2346,7 +2346,7 @@ fn dns_config_msg() -> capnp::message::Builder<capnp::message::HeapAllocator> {
 
 #[cfg(feature = "schema-socket")]
 fn socket_create_msg() -> capnp::message::Builder<capnp::message::HeapAllocator> {
-    use smart_cli::schema::socket_capnp::socket_service as w;
+    use smart_protocol::schema::socket_capnp::socket_service as w;
     let mut m = capnp::message::Builder::new_default();
     {
         let mut r = m.init_root::<w::create_results::Builder<'_>>();
@@ -2358,7 +2358,7 @@ fn socket_create_msg() -> capnp::message::Builder<capnp::message::HeapAllocator>
 
 #[cfg(feature = "schema-socket")]
 fn socket_info_msg() -> capnp::message::Builder<capnp::message::HeapAllocator> {
-    use smart_cli::schema::socket_capnp::socket_service as w;
+    use smart_protocol::schema::socket_capnp::socket_service as w;
     let mut m = capnp::message::Builder::new_default();
     {
         let mut r = m.init_root::<w::get_info_results::Builder<'_>>();
@@ -2372,7 +2372,7 @@ fn socket_info_msg() -> capnp::message::Builder<capnp::message::HeapAllocator> {
 
 #[cfg(feature = "schema-socket")]
 fn socket_name_msg() -> capnp::message::Builder<capnp::message::HeapAllocator> {
-    use smart_cli::schema::socket_capnp::socket_service as w;
+    use smart_protocol::schema::socket_capnp::socket_service as w;
     let mut m = capnp::message::Builder::new_default();
     {
         let mut r = m.init_root::<w::get_socket_name_results::Builder<'_>>();
@@ -2444,5 +2444,5 @@ fn routes_results_from_params(params: &network_capnp::network::SetRoutesParams) 
 
 #[cfg(feature = "schema-network")]
 fn network_schema_id() -> u64 {
-    smart_cli::contract::schema_id("network").unwrap_or(0)
+    smart_protocol::contract::schema_id("network").unwrap_or(0)
 }

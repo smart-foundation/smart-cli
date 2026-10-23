@@ -13,7 +13,7 @@
 
 use std::path::{Path, PathBuf};
 
-use smart_cli::contract;
+use smart_protocol::contract;
 use smart_cli::registry;
 
 /// The CLI's source tree.
