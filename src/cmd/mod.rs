@@ -41,7 +41,17 @@ pub mod discovery;
     feature = "cmd-settings",
     feature = "cmd-logging",
     feature = "cmd-clock",
-    feature = "cmd-time"
+    feature = "cmd-time",
+    feature = "cmd-clipboard",
+    feature = "cmd-audio",
+    feature = "cmd-media",
+    feature = "cmd-power",
+    feature = "cmd-database",
+    feature = "cmd-queue",
+    feature = "cmd-appindex",
+    feature = "cmd-manifest",
+    feature = "cmd-vcard",
+    feature = "cmd-content"
 ))]
 pub mod domain;
 #[cfg(feature = "cmd-files")]
@@ -56,6 +66,26 @@ pub mod logging;
 pub mod clock;
 #[cfg(feature = "cmd-time")]
 pub mod time;
+#[cfg(feature = "cmd-clipboard")]
+pub mod clipboard;
+#[cfg(feature = "cmd-audio")]
+pub mod audio;
+#[cfg(feature = "cmd-media")]
+pub mod media;
+#[cfg(feature = "cmd-power")]
+pub mod power;
+#[cfg(feature = "cmd-database")]
+pub mod database;
+#[cfg(feature = "cmd-queue")]
+pub mod queue;
+#[cfg(feature = "cmd-appindex")]
+pub mod appindex;
+#[cfg(feature = "cmd-manifest")]
+pub mod manifest;
+#[cfg(feature = "cmd-vcard")]
+pub mod vcard;
+#[cfg(feature = "cmd-content")]
+pub mod content;
 
 /// The CLI's own name, in the architecture-law sense (no "an implementation crate" here).
 pub const SHELL: &str = "net";
@@ -580,6 +610,46 @@ pub fn run(overrides: &ConnectOverrides) -> i32 {
         "time" => domain::dispatch("time", sub, &mut app, time::presenter),
         #[cfg(not(feature = "cmd-time"))]
         "time" => family_not_compiled(&flags, "time"),
+        #[cfg(feature = "cmd-clipboard")]
+        "clipboard" => domain::dispatch("clipboard", sub, &mut app, clipboard::presenter),
+        #[cfg(not(feature = "cmd-clipboard"))]
+        "clipboard" => family_not_compiled(&flags, "clipboard"),
+        #[cfg(feature = "cmd-audio")]
+        "audio" => domain::dispatch("audio", sub, &mut app, audio::presenter),
+        #[cfg(not(feature = "cmd-audio"))]
+        "audio" => family_not_compiled(&flags, "audio"),
+        #[cfg(feature = "cmd-media")]
+        "media" => domain::dispatch("media", sub, &mut app, media::presenter),
+        #[cfg(not(feature = "cmd-media"))]
+        "media" => family_not_compiled(&flags, "media"),
+        #[cfg(feature = "cmd-power")]
+        "power" => domain::dispatch("power", sub, &mut app, power::presenter),
+        #[cfg(not(feature = "cmd-power"))]
+        "power" => family_not_compiled(&flags, "power"),
+        #[cfg(feature = "cmd-database")]
+        "database" => domain::dispatch("database", sub, &mut app, database::presenter),
+        #[cfg(not(feature = "cmd-database"))]
+        "database" => family_not_compiled(&flags, "database"),
+        #[cfg(feature = "cmd-queue")]
+        "queue" => domain::dispatch("queue", sub, &mut app, queue::presenter),
+        #[cfg(not(feature = "cmd-queue"))]
+        "queue" => family_not_compiled(&flags, "queue"),
+        #[cfg(feature = "cmd-appindex")]
+        "appindex" => domain::dispatch("appindex", sub, &mut app, appindex::presenter),
+        #[cfg(not(feature = "cmd-appindex"))]
+        "appindex" => family_not_compiled(&flags, "appindex"),
+        #[cfg(feature = "cmd-manifest")]
+        "manifest" => domain::dispatch("manifest", sub, &mut app, manifest::presenter),
+        #[cfg(not(feature = "cmd-manifest"))]
+        "manifest" => family_not_compiled(&flags, "manifest"),
+        #[cfg(feature = "cmd-vcard")]
+        "vcard" => domain::dispatch("vcard", sub, &mut app, vcard::presenter),
+        #[cfg(not(feature = "cmd-vcard"))]
+        "vcard" => family_not_compiled(&flags, "vcard"),
+        #[cfg(feature = "cmd-content")]
+        "content" => domain::dispatch("content", sub, &mut app, content::presenter),
+        #[cfg(not(feature = "cmd-content"))]
+        "content" => family_not_compiled(&flags, "content"),
         // The default: a net-family task (`wifi`, `interface`, `routes`,
         // `ping`, `proxy`, ...). This is how `net wifi on` works — the shell
         // is net, so an unrecognised family word is a net task.
@@ -982,6 +1052,36 @@ pub fn compiled_families() -> Vec<&'static str> {
     }
     if cfg!(feature = "cmd-time") {
         families.push("time");
+    }
+    if cfg!(feature = "cmd-clipboard") {
+        families.push("clipboard");
+    }
+    if cfg!(feature = "cmd-audio") {
+        families.push("audio");
+    }
+    if cfg!(feature = "cmd-media") {
+        families.push("media");
+    }
+    if cfg!(feature = "cmd-power") {
+        families.push("power");
+    }
+    if cfg!(feature = "cmd-database") {
+        families.push("database");
+    }
+    if cfg!(feature = "cmd-queue") {
+        families.push("queue");
+    }
+    if cfg!(feature = "cmd-appindex") {
+        families.push("appindex");
+    }
+    if cfg!(feature = "cmd-manifest") {
+        families.push("manifest");
+    }
+    if cfg!(feature = "cmd-vcard") {
+        families.push("vcard");
+    }
+    if cfg!(feature = "cmd-content") {
+        families.push("content");
     }
     families.push("registry");
     families

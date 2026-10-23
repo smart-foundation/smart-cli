@@ -59,7 +59,17 @@ pub mod render; // dashboards/tables/bars over the SAME objects JSON emits
     feature = "cmd-settings",
     feature = "cmd-logging",
     feature = "cmd-clock",
-    feature = "cmd-time"
+    feature = "cmd-time",
+    feature = "cmd-clipboard",
+    feature = "cmd-audio",
+    feature = "cmd-media",
+    feature = "cmd-power",
+    feature = "cmd-database",
+    feature = "cmd-queue",
+    feature = "cmd-appindex",
+    feature = "cmd-manifest",
+    feature = "cmd-vcard",
+    feature = "cmd-content"
 ))]
 pub mod profile; // the CLI-local state file (TOML subset; no contract route)
 // Shell completions are GENERATED from the registry table the help screen
@@ -77,7 +87,17 @@ pub mod profile; // the CLI-local state file (TOML subset; no contract route)
     feature = "cmd-settings",
     feature = "cmd-logging",
     feature = "cmd-clock",
-    feature = "cmd-time"
+    feature = "cmd-time",
+    feature = "cmd-clipboard",
+    feature = "cmd-audio",
+    feature = "cmd-media",
+    feature = "cmd-power",
+    feature = "cmd-database",
+    feature = "cmd-queue",
+    feature = "cmd-appindex",
+    feature = "cmd-manifest",
+    feature = "cmd-vcard",
+    feature = "cmd-content"
 ))]
 pub mod completions;
 
@@ -108,7 +128,17 @@ pub mod service;
     feature = "cmd-settings",
     feature = "cmd-logging",
     feature = "cmd-clock",
-    feature = "cmd-time"
+    feature = "cmd-time",
+    feature = "cmd-clipboard",
+    feature = "cmd-audio",
+    feature = "cmd-media",
+    feature = "cmd-power",
+    feature = "cmd-database",
+    feature = "cmd-queue",
+    feature = "cmd-appindex",
+    feature = "cmd-manifest",
+    feature = "cmd-vcard",
+    feature = "cmd-content"
 ))]
 pub mod cmd;
 
